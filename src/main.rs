@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 mod benchmark;
 mod command_policy;
+mod config;
 mod exec;
 mod git;
 mod jobs;
@@ -11,6 +12,7 @@ mod patch;
 mod permission;
 mod redact;
 mod release_gate;
+mod runtime;
 mod sandbox;
 mod search;
 mod tunnel;
@@ -36,6 +38,20 @@ enum Command {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
     },
+    Setup {
+        #[arg(long, value_name = "PATH", default_value = ".")]
+        workspace: PathBuf,
+        #[arg(long)]
+        tunnel_command_json: Option<String>,
+    },
+    Connect {
+        #[arg(long, value_name = "PATH")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        tunnel_command_json: Option<String>,
+    },
+    Status,
+    Disconnect,
     SelfTest {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
@@ -108,6 +124,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("[OK] MCP transport: stdio");
             println!("[INFO] sandbox: {}", sandbox::status());
             println!("[OK] approval engine: enabled for process execution");
+        }
+        Command::Setup {
+            workspace,
+            tunnel_command_json,
+        } => {
+            let workspace = workspace::Workspace::new(workspace)?;
+            let user_config =
+                config::UserConfig::from_inputs(workspace.root(), tunnel_command_json.as_deref())?;
+            let path = config::save(&user_config)?;
+            println!("Configured web-harness.");
+            println!("workspace: {}", user_config.workspace);
+            println!("config: {}", path.display());
+            println!(
+                "tunnel: {}",
+                if user_config.tunnel_command.is_some() {
+                    "configured"
+                } else {
+                    "not configured"
+                }
+            );
+        }
+        Command::Connect {
+            workspace,
+            tunnel_command_json,
+        } => {
+            let status = runtime::connect(workspace.as_deref(), tunnel_command_json.as_deref())?;
+            println!("{}", runtime::format_status(&status));
+        }
+        Command::Status => {
+            let status = runtime::status()?;
+            println!("{}", runtime::format_status(&status));
+        }
+        Command::Disconnect => {
+            let status = runtime::disconnect()?;
+            println!("{}", runtime::format_status(&status));
         }
         Command::SelfTest { workspace } => {
             let workspace = workspace::Workspace::new(workspace)?;
