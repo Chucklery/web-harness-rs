@@ -1,0 +1,224 @@
+use crate::workspace::Workspace;
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+use thiserror::Error;
+
+const OUTPUT_LIMIT: usize = 64 * 1024;
+const EXTERNAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Error)]
+pub enum TunnelError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("invalid tunnel command: {0}")]
+    Invalid(String),
+    #[error("local MCP acceptance failed: {0}")]
+    Local(String),
+}
+
+#[derive(Debug, Serialize)]
+pub struct TunnelReport {
+    pub passed: bool,
+    pub local_mcp_roundtrip: bool,
+    pub external_command_configured: bool,
+    pub external_command_passed: Option<bool>,
+    pub external_exit_code: Option<i32>,
+    pub stdout_tail: Option<String>,
+    pub stderr_tail: Option<String>,
+    pub note: String,
+}
+
+pub fn doctor(workspace: &Workspace) -> Result<TunnelReport, TunnelError> {
+    local_roundtrip(workspace)?;
+    Ok(TunnelReport {
+        passed: true,
+        local_mcp_roundtrip: true,
+        external_command_configured: false,
+        external_command_passed: None,
+        external_exit_code: None,
+        stdout_tail: None,
+        stderr_tail: None,
+        note: "Local stdio MCP initialize/tools-list roundtrip passed. Configure an exact official tunnel acceptance command to test the remote tunnel.".into(),
+    })
+}
+
+pub fn accept(
+    workspace: &Workspace,
+    command_json: Option<&str>,
+) -> Result<TunnelReport, TunnelError> {
+    local_roundtrip(workspace)?;
+    let Some(command_json) = command_json else {
+        return Ok(TunnelReport {
+            passed: false,
+            local_mcp_roundtrip: true,
+            external_command_configured: false,
+            external_command_passed: None,
+            external_exit_code: None,
+            stdout_tail: None,
+            stderr_tail: None,
+            note: "No external tunnel command configured. Set WEB_HARNESS_TUNNEL_COMMAND_JSON to a JSON argv array that performs the current official Secure MCP Tunnel acceptance flow.".into(),
+        });
+    };
+
+    let argv: Vec<String> = serde_json::from_str(command_json)?;
+    if argv.is_empty() || argv.len() > 64 || argv.iter().any(|arg| arg.len() > 16 * 1024) {
+        return Err(TunnelError::Invalid(
+            "command JSON must be a non-empty argv array with at most 64 bounded items".into(),
+        ));
+    }
+
+    let current_exe = std::env::current_exe()?;
+    let server_args = json!([
+        "serve",
+        "--stdio",
+        "--workspace",
+        workspace.root().display().to_string()
+    ]);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("WEB_HARNESS_SERVER_BIN", &current_exe)
+        .env("WEB_HARNESS_SERVER_ARGS_JSON", server_args.to_string())
+        .env("WEB_HARNESS_WORKSPACE", workspace.root())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| TunnelError::Local("missing external stdout".into()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| TunnelError::Local("missing external stderr".into()))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if start.elapsed() >= EXTERNAL_TIMEOUT {
+            child.kill()?;
+            let _ = child.wait();
+            let stdout = stdout_reader.join().unwrap_or_default();
+            let stderr = stderr_reader.join().unwrap_or_default();
+            return Ok(TunnelReport {
+                passed: false,
+                local_mcp_roundtrip: true,
+                external_command_configured: true,
+                external_command_passed: Some(false),
+                external_exit_code: None,
+                stdout_tail: Some(bounded_tail(&stdout, OUTPUT_LIMIT)),
+                stderr_tail: Some(format!(
+                    "{}\nexternal tunnel acceptance command timed out after 120 seconds",
+                    bounded_tail(&stderr, OUTPUT_LIMIT)
+                )),
+                note: "The injected command is responsible for exercising the current official Secure MCP Tunnel flow.".into(),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    let passed = status.success();
+    Ok(TunnelReport {
+        passed,
+        local_mcp_roundtrip: true,
+        external_command_configured: true,
+        external_command_passed: Some(passed),
+        external_exit_code: status.code(),
+        stdout_tail: Some(bounded_tail(&stdout, OUTPUT_LIMIT)),
+        stderr_tail: Some(bounded_tail(&stderr, OUTPUT_LIMIT)),
+        note: "The external command is user/CI supplied so this project never invents tunnel-client flags. It should implement the current official Secure MCP Tunnel acceptance steps.".into(),
+    })
+}
+
+fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
+    let binary = std::env::current_exe()?;
+    let workspace_arg = workspace.root().display().to_string();
+    let mut child = Command::new(binary)
+        .args(["serve", "--stdio", "--workspace", &workspace_arg])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| TunnelError::Local("missing child stdin".into()))?;
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
+    )?;
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+    )?;
+    stdin.flush()?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| TunnelError::Local("missing child stdout".into()))?;
+    let mut lines = BufReader::new(stdout).lines();
+    let initialize: Value = serde_json::from_str(
+        &lines
+            .next()
+            .ok_or_else(|| TunnelError::Local("missing initialize response".into()))??,
+    )?;
+    if initialize["result"]["serverInfo"]["name"] != "web-harness" {
+        return Err(TunnelError::Local("invalid initialize response".into()));
+    }
+
+    let tools: Value = serde_json::from_str(
+        &lines
+            .next()
+            .ok_or_else(|| TunnelError::Local("missing tools/list response".into()))??,
+    )?;
+    if !tools["result"]["tools"].is_array() {
+        return Err(TunnelError::Local("invalid tools/list response".into()));
+    }
+
+    drop(stdin);
+    if !child.wait()?.success() {
+        return Err(TunnelError::Local(
+            "stdio server exited unsuccessfully".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_tail(bytes: &[u8], limit: usize) -> String {
+    let start = bytes.len().saturating_sub(limit);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_tail_keeps_the_end() {
+        assert_eq!(bounded_tail(b"abcdef", 3), "def");
+    }
+}

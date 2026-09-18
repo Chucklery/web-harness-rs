@@ -11,6 +11,7 @@ Current automated tests cover:
 - Git status gateway
 - approval ticket binding and one-time consumption
 - an end-to-end stdio MCP initialization and tool-list test
+- a tunnel doctor that validates local MCP roundtrip before external tunnel acceptance
 
 The project should grow toward five layers:
 

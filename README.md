@@ -14,6 +14,7 @@ cargo run -- doctor --workspace .
 cargo run -- workspace check .
 cargo run -- self-test --workspace .
 cargo run -- benchmark --workspace . --iterations 10000
+cargo run -- tunnel doctor --workspace .
 cargo run -- serve --stdio --workspace .
 ~~~
 
