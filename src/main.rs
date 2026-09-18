@@ -8,6 +8,7 @@ mod exec;
 mod git;
 mod jobs;
 mod mcp;
+mod onboarding;
 mod patch;
 mod permission;
 mod redact;
@@ -41,10 +42,16 @@ enum Command {
     Setup {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
+        #[arg(long)]
+        tunnel_id: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
         #[arg(long, conflicts_with = "tunnel_wrapper")]
         tunnel_command_json: Option<String>,
         #[arg(long, value_name = "PATH", conflicts_with = "tunnel_command_json")]
         tunnel_wrapper: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        show: bool,
     },
     Connect {
         #[arg(long, value_name = "PATH")]
@@ -129,29 +136,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Setup {
             workspace,
+            tunnel_id,
+            api_key,
             tunnel_command_json,
             tunnel_wrapper,
+            show,
         } => {
-            let workspace = workspace::Workspace::new(workspace)?;
-            let user_config = match tunnel_wrapper {
-                Some(wrapper) => config::UserConfig::from_wrapper(workspace.root(), &wrapper)?,
-                None => config::UserConfig::from_inputs(
+            if show {
+                println!(
+                    "{}",
+                    onboarding::format_setup_status(&onboarding::status()?)
+                );
+            } else {
+                let workspace = workspace::Workspace::new(workspace)?;
+                let result = onboarding::setup(
                     workspace.root(),
-                    tunnel_command_json.as_deref(),
-                )?,
-            };
-            let path = config::save(&user_config)?;
-            println!("Configured web-harness.");
-            println!("workspace: {}", user_config.workspace);
-            println!("config: {}", path.display());
-            println!(
-                "tunnel: {}",
-                if user_config.tunnel_command.is_some() {
-                    "configured"
-                } else {
-                    "not configured"
-                }
-            );
+                    onboarding::SetupOptions {
+                        tunnel_id,
+                        api_key,
+                        tunnel_command_json,
+                        tunnel_wrapper,
+                    },
+                )?;
+                println!("{}", onboarding::format_setup_result(&result));
+            }
         }
         Command::Connect {
             workspace,

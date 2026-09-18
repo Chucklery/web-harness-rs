@@ -1,4 +1,5 @@
 use crate::config::{self, UserConfig};
+use crate::onboarding;
 use crate::sandbox;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,8 @@ pub fn connect(
     ]);
 
     let mut command = Command::new(&argv[0]);
+    let shell_env = onboarding::managed_shell_env()
+        .map_err(|error| RuntimeError::Io(std::io::Error::other(error.to_string())))?;
     command
         .args(&argv[1..])
         .env("WEB_HARNESS_SERVER_BIN", &current_exe)
@@ -97,6 +100,12 @@ pub fn connect(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(tunnel_id) = shell_env.tunnel_id {
+        command.env("CONTROL_PLANE_TUNNEL_ID", tunnel_id);
+    }
+    if let Some(api_key) = shell_env.api_key {
+        command.env("CONTROL_PLANE_API_KEY", api_key);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
