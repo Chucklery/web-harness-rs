@@ -49,11 +49,13 @@ pub fn connect(
     tunnel_override: Option<&str>,
 ) -> Result<UserStatus, RuntimeError> {
     let mut user_config = config::load_optional()?.ok_or(RuntimeError::NotConfigured)?;
-    if let Some(workspace) = workspace_override {
-        let workspace = Workspace::new(workspace)
-            .map_err(|error| RuntimeError::InvalidWorkspace(error.to_string()))?;
-        user_config.workspace = workspace.root().display().to_string();
-    }
+    let selected_workspace = match workspace_override {
+        Some(workspace) => workspace.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    let selected_workspace = Workspace::new(selected_workspace)
+        .map_err(|error| RuntimeError::InvalidWorkspace(error.to_string()))?;
+    user_config.workspace = selected_workspace.root().display().to_string();
     if let Some(command) = tunnel_override {
         user_config.tunnel_command = Some(config::parse_tunnel_command(command)?);
     }
@@ -70,8 +72,7 @@ pub fn connect(
         remove_state()?;
     }
 
-    let workspace = Workspace::new(&user_config.workspace)
-        .map_err(|error| RuntimeError::InvalidWorkspace(error.to_string()))?;
+    let workspace = selected_workspace;
     let argv = user_config
         .tunnel_command
         .as_ref()
