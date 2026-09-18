@@ -88,6 +88,7 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
             eprintln!(
                 "Create runtime API key: https://platform.openai.com/settings/organization/api-keys"
             );
+            eprintln!("Recommended runtime key permissions: Tunnels Read + Use");
             eprintln!(
                 "warning: web-harness will store CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY as plaintext in {}",
                 zshrc_path()?.display()

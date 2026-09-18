@@ -12,7 +12,7 @@ test -x "$binary"
 mkdir -p dist
 cp "$binary" "$stage/web-harness"
 mkdir -p "$stage/libexec/web-harness"
-./scripts/fetch-tunnel-client.sh "$target" "$stage/libexec/web-harness"
+./scripts/fetch-tunnel-client.sh "$target" "$stage/libexec/web-harness" >/dev/null
 cp LICENSE NOTICE README.md THIRD_PARTY_NOTICES.md "$stage/"
 tar -C "$stage" -czf "dist/$archive" .
 shasum -a 256 "dist/$archive" | sed 's#  dist/#  #' > "dist/$archive.sha256"
