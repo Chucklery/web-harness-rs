@@ -1,3 +1,5 @@
+use crate::exec;
+use crate::jobs::JobManager;
 use crate::patch;
 use crate::search;
 use crate::workspace::Workspace;
@@ -27,6 +29,7 @@ struct Response {
 pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
+    let mut jobs = JobManager::new();
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -36,7 +39,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
             Ok(request) if request.id.is_none() && request.method.starts_with("notifications/") => {
                 continue;
             }
-            Ok(request) => handle(request, &workspace),
+            Ok(request) => handle(request, &workspace, &mut jobs),
             Err(error) => Response {
                 jsonrpc: "2.0",
                 id: None,
@@ -51,7 +54,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn handle(request: Request, workspace: &Workspace) -> Response {
+fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Response {
     if request.jsonrpc != "2.0" {
         return Response {
             jsonrpc: "2.0",
@@ -113,9 +116,38 @@ fn handle(request: Request, workspace: &Workspace) -> Response {
                     "required": ["patch"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "exec",
+                "description": "Execute a bounded argv command in the workspace, foreground or background.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 64},
+                        "cwd": {"type": "string"},
+                        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
+                        "background": {"type": "boolean"}
+                    },
+                    "required": ["argv"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "job",
+                "description": "Poll, read output, or cancel a background job.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["poll", "output", "cancel"]},
+                        "id": {"type": "string"},
+                        "stream": {"type": "string", "enum": ["stdout", "stderr"]}
+                    },
+                    "required": ["action", "id"],
+                    "additionalProperties": false
+                }
             }
         ]})),
-        "tools/call" => call_tool(&request.params, workspace),
+        "tools/call" => call_tool(&request.params, workspace, jobs),
         method => Err(json!({"code": -32601, "message": format!("method not found: {method}")})),
     };
     match result {
@@ -134,7 +166,7 @@ fn handle(request: Request, workspace: &Workspace) -> Response {
     }
 }
 
-fn call_tool(params: &Value, workspace: &Workspace) -> Result<Value, Value> {
+fn call_tool(params: &Value, workspace: &Workspace, jobs: &mut JobManager) -> Result<Value, Value> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -223,6 +255,80 @@ fn call_tool(params: &Value, workspace: &Workspace) -> Result<Value, Value> {
             Ok(
                 json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"changed_paths": changed_paths})).unwrap()}]}),
             )
+        }
+        "exec" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let argv = arguments
+                .get("argv")
+                .and_then(Value::as_array)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.argv is required"}))?
+                .iter()
+                .map(|value| {
+                    value.as_str().map(ToOwned::to_owned).ok_or_else(
+                        || json!({"code": -32602, "message": "argv items must be strings"}),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let cwd = arguments.get("cwd").and_then(Value::as_str);
+            let background = arguments
+                .get("background")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let value = if background {
+                serde_json::to_value(
+                    exec::background(jobs, workspace, &argv, cwd)
+                        .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
+                )
+            } else {
+                serde_json::to_value(
+                    exec::foreground(
+                        jobs,
+                        workspace,
+                        &argv,
+                        cwd,
+                        arguments.get("timeout_ms").and_then(Value::as_u64),
+                    )
+                    .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
+                )
+            }
+            .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "job" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
+                || json!({"code": -32602, "message": "arguments.action is required"}),
+            )?;
+            let id = arguments
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.id is required"}))?;
+            let value = match action {
+                "poll" => serde_json::to_value(
+                    jobs.poll(id)
+                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?,
+                )
+                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?,
+                "cancel" => serde_json::to_value(
+                    jobs.cancel(id)
+                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?,
+                )
+                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?,
+                "output" => {
+                    let stream = arguments
+                        .get("stream")
+                        .and_then(Value::as_str)
+                        .unwrap_or("stdout");
+                    let (text, truncated) = jobs
+                        .output(id, stream)
+                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?;
+                    json!({"stream": stream, "text": text, "truncated": truncated})
+                }
+                _ => {
+                    return Err(json!({"code": -32602, "message": "unknown job action"}));
+                }
+            };
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
     }

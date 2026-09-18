@@ -30,10 +30,16 @@ Discovers AGENTS.md files from the workspace root down to the target path and re
 
 Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace-scoped, updates require matching context, ambiguous hunks are rejected, and writes use a same-directory temporary file followed by rename.
 
+### exec
+
+Executes an argv-based command inside the workspace. Shell-string mode is intentionally absent. Foreground commands have a maximum 10 minute timeout and return at most 256 KiB from each output stream. Background execution is limited to two concurrent jobs.
+
+### job
+
+Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job output is spilled to temporary files rather than accumulated without bound in memory. Owned process groups are terminated when the host exits.
+
 ## Planned
 
-- process execution
-- background jobs
 - structured Git
 - approval handling
 

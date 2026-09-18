@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod exec;
+mod jobs;
 mod mcp;
 mod patch;
 mod search;
