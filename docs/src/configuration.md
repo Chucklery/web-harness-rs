@@ -36,7 +36,7 @@ The target is ~/.zshrc, or ZDOTDIR/.zshrc when ZDOTDIR is set.
 
 The update is idempotent: repeated setup replaces this block instead of appending duplicates. The file is atomically rewritten with mode 0600. Before an update, web-harness creates a private backup with the managed secret block removed so old API keys are not duplicated into backup files.
 
-The generated wrapper lives next to config.json and contains no API-key literal. connect reads the managed block directly and injects the two environment variables, so a new terminal or manual source ~/.zshrc is not required.
+The generated wrapper lives next to config.json and contains no API-key literal. connect reads the managed block directly, injects the two environment variables, and launches the bundled OpenAI tunnel-client, so a new terminal or manual source ~/.zshrc is not required.
 
 ### Plaintext warning
 
@@ -99,4 +99,4 @@ The wrapper is responsible for invoking the current official OpenAI Secure MCP T
 
 This indirection is intentional because official tunnel CLI flags and UI can evolve independently from web-harness.
 
-The automatically generated wrapper relies on the official CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY environment variables and invokes tunnel-client run with the stdio MCP binding.
+The automatically generated wrapper relies on the official CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY environment variables and invokes the bundled tunnel-client with the stdio MCP binding. Source builds may fall back to a developer-provided tunnel-client on PATH.

@@ -4,6 +4,25 @@ All notable changes will be documented here.
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-18
+
+### Added
+
+- Interactive tunnel setup with hidden API-key input, managed zsh configuration, automatic tunnel wrapper generation, and safe setup status display.
+- Official OpenAI tunnel-client v0.0.14 bundled into GitHub Release and Homebrew distributions with pinned SHA256 verification and upstream license/SPDX material.
+
+### Changed
+
+- setup now points users directly to OpenAI Platform Tunnels and Runtime API Keys before credential entry.
+- connect resolves and launches the bundled tunnel-client automatically; release/Homebrew users no longer install tunnel-client separately.
+- Release archives preserve the bundled OpenAI runtime under libexec/web-harness/.
+
+### Removed
+
+- Obsolete root-level web-harness-final-architecture.md; maintained architecture information now lives in the mdBook Architecture page and ADRs.
+
+## 0.1.0 - 2026-09-18
+
 ### Added
 
 - Initial Rust CLI and MCP stdio skeleton.
@@ -24,7 +43,6 @@ All notable changes will be documented here.
 - Optional Tunnel PID RSS sampling and explicit multi-machine release-gate aggregation.
 - User-facing setup/connect/status/disconnect lifecycle with stale PID recovery.
 - Approval-gated structured Git add/commit/switch/restore/push workflow.
-- Interactive tunnel setup with hidden API-key input, managed zsh configuration, automatic tunnel wrapper generation, and safe setup status display.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 

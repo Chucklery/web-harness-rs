@@ -24,7 +24,7 @@ Your local repository
 
 ## Install
 
-Download the archive for your platform from a GitHub Release, verify SHA256SUMS, and put web-harness on PATH.
+Download the archive for your platform from a GitHub Release and verify SHA256SUMS. Release archives include the matching official OpenAI tunnel-client runtime, so users do not install tunnel-client separately.
 
 The canonical repository is https://github.com/Chucklery/web-harness-rs.
 
@@ -57,6 +57,12 @@ You will be prompted for:
 - OpenAI tunnel_id
 - OpenAI runtime API key
 
+setup prints the current OpenAI Platform locations before prompting:
+
+- https://platform.openai.com/
+- tunnel_id: https://platform.openai.com/settings/organization/tunnels
+- runtime API key: https://platform.openai.com/settings/organization/api-keys
+
 The API key prompt disables terminal echo. web-harness stores CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a managed block in ~/.zshrc (or ZDOTDIR/.zshrc), generates its tunnel wrapper automatically, and keeps the API key out of config.json and the wrapper itself.
 
 This is intentionally convenience-first: ~/.zshrc contains the API key in plaintext. web-harness changes the managed file to mode 0600 and makes a private backup before updates, but users who do not want plaintext shell configuration should keep using a custom wrapper or external secret mechanism instead.
@@ -86,7 +92,7 @@ cd ~/code/another-project
 web-harness connect
 ~~~
 
-connect uses the current directory as the workspace, starts the configured tunnel wrapper as an owned process group, persists only non-secret runtime state, and returns immediately.
+connect uses the current directory as the workspace, starts the bundled OpenAI tunnel-client through the configured wrapper as an owned process group, persists only non-secret runtime state, and returns immediately.
 
 Check or stop it with:
 
@@ -159,10 +165,6 @@ web-harness serve --stdio --workspace .
 ~~~
 
 GitHub Pages deployment is configured in .github/workflows/docs.yml.
-
-## Architecture
-
-The complete engineering blueprint lives in web-harness-final-architecture.md.
 
 ## Contributing
 

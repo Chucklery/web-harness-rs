@@ -41,5 +41,5 @@ The host does not run another model and does not embed a second agent loop.
 
 The dominant end-to-end latency is expected to come from remote round trips, not a few local microseconds. Therefore the design prioritizes batch operations, compact schemas, compact results, and bounded local state.
 
-The complete design blueprint is stored at the repository root in web-harness-final-architecture.md.
+Accepted architectural constraints are maintained in this documentation site and the ADRs under docs/src/adr/.
 

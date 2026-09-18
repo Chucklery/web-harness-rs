@@ -35,9 +35,11 @@ The tag-triggered `.github/workflows/release.yml` builds locked release binaries
 Each target is packaged with:
 
 - web-harness
+- the pinned official OpenAI tunnel-client platform payload under libexec/web-harness/
 - LICENSE
 - NOTICE
 - README.md
+- THIRD_PARTY_NOTICES.md
 
 The workflow produces per-archive SHA256 files and an aggregate `SHA256SUMS`, then renders a Homebrew formula from `packaging/homebrew/web-harness.rb.template`.
 
@@ -52,13 +54,13 @@ Use the same packaging script as CI:
 ~~~bash
 host_target="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --release --locked --target "$host_target"
-./scripts/package-release.sh "$host_target" 0.1.0
+./scripts/package-release.sh "$host_target" 0.2.0
 ~~~
 
 The Homebrew renderer expects checksums for all release targets:
 
 ~~~bash
-./scripts/render-homebrew-formula.sh 0.1.0 dist dist/web-harness.rb
+./scripts/render-homebrew-formula.sh 0.2.0 dist dist/web-harness.rb
 ~~~
 
 ## Publishing

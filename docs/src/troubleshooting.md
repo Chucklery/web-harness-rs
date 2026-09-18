@@ -8,7 +8,7 @@ Run setup first:
 web-harness setup
 ~~~
 
-If setup says tunnel-client is not found, install the official OpenAI tunnel-client and make sure tunnel-client is on PATH. web-harness intentionally does not guess an installation command.
+Official release and Homebrew packages include tunnel-client. If setup says it is unavailable, reinstall web-harness because the installation is incomplete. Source builds may use a developer-provided tunnel-client on PATH.
 
 ## I changed the key but connect still fails
 
@@ -101,4 +101,4 @@ The MCP protocol uses stdout. Diagnostic logging must go to stderr. Avoid printi
 
 ## Secure MCP Tunnel does not connect
 
-First run tunnel doctor to verify the local stdio MCP contract. Then confirm tunnel-client is on PATH and use setup --show to verify that tunnel_id and API-key presence are configured. The generated wrapper uses the official control-plane environment variables and the stdio MCP command binding.
+First run tunnel doctor to verify the local stdio MCP contract. Then use setup --show to verify that tunnel_id, API-key presence, and bundled tunnel-client availability are configured. The generated wrapper uses the official control-plane environment variables and the stdio MCP command binding.

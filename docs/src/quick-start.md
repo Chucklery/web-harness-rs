@@ -11,9 +11,9 @@ web-harness setup
 
 setup prompts for the OpenAI tunnel_id and runtime API key. API-key input is hidden.
 
-The values are persisted as CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a web-harness-managed block in ~/.zshrc, while config.json stores only non-secret workspace/wrapper metadata.
+Before prompting, setup prints the OpenAI Platform URLs for Tunnels and Runtime API Keys. The values are persisted as CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a web-harness-managed block in ~/.zshrc, while config.json stores only non-secret workspace/wrapper metadata.
 
-setup automatically creates the tunnel wrapper and reports whether tunnel-client is available on PATH.
+Official release archives and Homebrew installs include the matching OpenAI tunnel-client runtime. setup automatically creates the wrapper that launches this bundled client; users do not install tunnel-client separately.
 
 Inspect the configuration without showing the API key:
 

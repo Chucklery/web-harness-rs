@@ -26,6 +26,7 @@ The current pre-1.0 implementation includes:
 - minimized child-process environment via env_clear plus a small operational allowlist
 - command policy rejects executable path traversal and direct host-control tools such as reboot/shutdown/disk-management privilege escalation entry points
 - macOS adversarial sandbox coverage for network denial, workspace-outside write denial, workspace/tmp write allow, and system read allow
+- release packaging pins the redistributed OpenAI tunnel-client platform archive by SHA256 and preserves upstream license/SPDX evidence
 
 The following architecture components are not yet implemented:
 

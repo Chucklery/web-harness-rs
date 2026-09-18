@@ -2,5 +2,5 @@
 
 ADRs capture constraints that should remain stable even as implementation details change.
 
-The initial ADRs are distilled from web-harness-final-architecture.md.
+The ADRs are the maintained source of truth for stable architectural constraints.
 

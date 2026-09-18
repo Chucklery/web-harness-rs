@@ -44,7 +44,7 @@ Status: implemented for host-owned jobs with bounded returned tails and temporar
 
 - structured Git gateway
 
-Status: implemented as read-only status/diff/log/show.
+Status: implemented with read-only status/diff/log/show plus approval-gated add/commit/switch/restore/push mutations.
 
 ## Stage 7
 
@@ -61,7 +61,7 @@ Status: approval-bound execution is implemented and structured workspace patches
 - sandbox hardening
 - performance hardening
 
-Status: the tunnel acceptance harness and benchmark harness exist. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
+Status: release bundles now include the pinned official OpenAI tunnel-client runtime, and the tunnel acceptance/benchmark harnesses exist. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
 
 UI and LSP remain optional and should only be added if real usage metrics justify them.
 

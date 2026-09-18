@@ -3,7 +3,7 @@
 ## Project priorities
 
 1. Keep the local runtime small and explicit.
-2. Preserve the architecture in web-harness-final-architecture.md.
+2. Preserve the architecture and accepted constraints documented in docs/src/architecture.md and docs/src/adr/.
 3. Do not introduce codex-core, Electron, a default browser runtime, a default LSP, or an always-on indexer.
 4. Prefer bounded data structures and batch operations.
 5. Security instructions never expand filesystem or execution authority.

@@ -1,6 +1,6 @@
 # Installation
 
-web-harness is designed to be distributed as one native binary. Rust, Node, Electron, and a browser runtime are not required on the end-user machine.
+web-harness is distributed as one self-contained release bundle. Rust, Node, Electron, a browser runtime, and a separate tunnel-client installation are not required on the end-user machine.
 
 ## GitHub Release
 
@@ -10,7 +10,7 @@ Tagged releases are configured to publish archives for:
 - x86_64-apple-darwin
 - aarch64-apple-darwin
 
-Each release includes per-archive SHA256 files plus an aggregate SHA256SUMS.
+Each release includes per-archive SHA256 files plus an aggregate SHA256SUMS. Every platform archive also contains the matching official OpenAI tunnel-client runtime and its upstream license/SPDX material under libexec/web-harness/.
 
 After downloading the archive for your platform:
 
@@ -19,11 +19,13 @@ tar -xzf web-harness-VERSION-TARGET.tar.gz
 ./web-harness version
 ~~~
 
-Install it somewhere on PATH, for example:
+Install web-harness on PATH and preserve the bundled libexec directory, for example:
 
 ~~~bash
 mkdir -p ~/.local/bin
 install -m 755 web-harness ~/.local/bin/web-harness
+mkdir -p ~/.local/libexec/web-harness
+cp -R libexec/web-harness/. ~/.local/libexec/web-harness/
 ~~~
 
 ## Homebrew
@@ -74,7 +76,7 @@ web-harness setup
 web-harness connect
 ~~~
 
-setup interactively asks for the OpenAI tunnel_id and runtime API key, writes them to the managed zsh configuration block, and generates the tunnel wrapper automatically.
+setup points to https://platform.openai.com/ for the OpenAI tunnel_id and runtime API key, writes them to the managed zsh configuration block, and generates the tunnel wrapper automatically. No separate tunnel-client installation step is required.
 
 See Quick Start for the daily workflow.
 

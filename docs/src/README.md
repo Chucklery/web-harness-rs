@@ -26,6 +26,7 @@ The current pre-1.0 implementation includes:
 - background job lifecycle and output tails
 - structured read-only and approval-gated Git mutation operations
 - one-time approval-bound execution and Git mutations
+- bundled official OpenAI tunnel-client runtime in release/Homebrew distributions
 
 macOS Seatbelt enforcement is implemented. Real Secure MCP Tunnel production acceptance and complete 8 GiB Intel/Apple Silicon release evidence remain release gates.
 

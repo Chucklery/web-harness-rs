@@ -24,7 +24,7 @@ web-harness
 
 ## 安装
 
-从 GitHub Release 下载对应平台压缩包，使用 SHA256SUMS 校验后，把 web-harness 放入 PATH。
+从 GitHub Release 下载对应平台压缩包并使用 SHA256SUMS 校验。Release 已内置对应平台的 OpenAI 官方 tunnel-client 运行组件，用户不需要再单独安装 tunnel-client。
 
 正式仓库地址为 https://github.com/Chucklery/web-harness-rs。
 
@@ -57,6 +57,12 @@ web-harness setup
 - OpenAI tunnel_id
 - OpenAI runtime API key
 
+setup 在输入前会直接提示获取地址：
+
+- https://platform.openai.com/
+- tunnel_id：https://platform.openai.com/settings/organization/tunnels
+- runtime API key：https://platform.openai.com/settings/organization/api-keys
+
 输入 API key 时终端不会回显。web-harness 会把 CONTROL_PLANE_TUNNEL_ID 和 CONTROL_PLANE_API_KEY 写入 ~/.zshrc（若设置了 ZDOTDIR，则写入 ZDOTDIR/.zshrc）中的受控 block，同时自动生成 tunnel wrapper；API key 不会写入 config.json 或 wrapper。
 
 这是便利优先的方案：API key 会以明文存在于 ~/.zshrc。web-harness 会把该文件权限设为 0600，并在更新前创建私有备份；如果不接受明文 shell 配置，应继续使用自定义 wrapper 或其他 secret 管理方式。
@@ -86,7 +92,7 @@ cd ~/code/another-project
 web-harness connect
 ~~~
 
-connect 默认把当前目录作为 workspace，启动已配置的 Tunnel wrapper，并只持久化非敏感运行状态。
+connect 默认把当前目录作为 workspace，通过已配置的 wrapper 启动随 web-harness 安装的官方 tunnel-client，并只持久化非敏感运行状态。
 
 查看和断开：
 
@@ -149,8 +155,6 @@ web-harness serve --stdio --workspace .
 ~~~
 
 文档站使用 mdBook，并通过 GitHub Pages 发布。
-
-完整工程架构见 web-harness-final-architecture.md。
 
 ## License
 

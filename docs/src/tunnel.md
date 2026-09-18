@@ -1,6 +1,6 @@
 # ChatGPT Web and OpenAI Secure MCP Tunnel
 
-The intended production connection is OpenAI Secure MCP Tunnel with web-harness running as a local stdio MCP server.
+The intended production connection is OpenAI Secure MCP Tunnel with web-harness running as a local stdio MCP server. Official web-harness release bundles include the matching OpenAI tunnel-client runtime.
 
 Conceptually:
 
@@ -15,6 +15,11 @@ Tunnel CLI flags, authentication flows, ChatGPT settings, and developer-mode UI 
 Always verify setup against:
 
 https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+
+setup directs users to:
+
+- https://platform.openai.com/settings/organization/tunnels for tunnel_id
+- https://platform.openai.com/settings/organization/api-keys for the runtime API key
 
 ## Local command
 
