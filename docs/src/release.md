@@ -41,6 +41,10 @@ Each target is packaged with:
 
 The workflow produces per-archive SHA256 files and an aggregate `SHA256SUMS`, then renders a Homebrew formula from `packaging/homebrew/web-harness.rb.template`.
 
+The rendered formula for stable releases is published to:
+
+https://github.com/Chucklery/homebrew-tap
+
 ## Local packaging check
 
 Use the same packaging script as CI:
