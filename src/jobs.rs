@@ -1,3 +1,4 @@
+use crate::sandbox;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -70,12 +71,18 @@ impl JobManager {
         argv: &[String],
         cwd: Option<&str>,
         timeout_ms: Option<u64>,
+        sandboxed: bool,
     ) -> Result<ExecResult, JobError> {
         validate_argv(argv)?;
         let cwd = resolve_cwd(workspace, cwd)?;
         let (stdout_path, stdout) = create_artifact("stdout")?;
         let (stderr_path, stderr) = create_artifact("stderr")?;
-        let mut child = spawn(argv, &cwd, stdout, stderr)?;
+        let effective_argv = if sandboxed {
+            sandbox::wrap_argv(workspace, argv)
+        } else {
+            argv.to_vec()
+        };
+        let mut child = spawn(&effective_argv, &cwd, stdout, stderr)?;
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000)).min(MAX_TIMEOUT);
         let start = Instant::now();
         let (exit_code, timed_out) = loop {
@@ -109,6 +116,7 @@ impl JobManager {
         workspace: &Workspace,
         argv: &[String],
         cwd: Option<&str>,
+        sandboxed: bool,
     ) -> Result<JobStatus, JobError> {
         validate_argv(argv)?;
         self.refresh();
@@ -124,7 +132,12 @@ impl JobManager {
         let cwd = resolve_cwd(workspace, cwd)?;
         let (stdout_path, stdout) = create_artifact("stdout")?;
         let (stderr_path, stderr) = create_artifact("stderr")?;
-        let child = spawn(argv, &cwd, stdout, stderr)?;
+        let effective_argv = if sandboxed {
+            sandbox::wrap_argv(workspace, argv)
+        } else {
+            argv.to_vec()
+        };
+        let child = spawn(&effective_argv, &cwd, stdout, stderr)?;
         let id = format!(
             "job_{}_{}",
             std::process::id(),
@@ -326,6 +339,7 @@ mod tests {
                 &["sh".into(), "-c".into(), "printf hello".into()],
                 None,
                 Some(2_000),
+                false,
             )
             .unwrap();
         assert_eq!(result.stdout_tail, "hello");
@@ -338,7 +352,12 @@ mod tests {
         let ws = Workspace::new(dir.path()).unwrap();
         let mut manager = JobManager::new();
         let started = manager
-            .start(&ws, &["sh".into(), "-c".into(), "printf done".into()], None)
+            .start(
+                &ws,
+                &["sh".into(), "-c".into(), "printf done".into()],
+                None,
+                false,
+            )
             .unwrap();
         for _ in 0..100 {
             if manager.poll(&started.id).unwrap().state == "exited" {
@@ -348,5 +367,30 @@ mod tests {
         }
         let (output, _) = manager.output(&started.id, "stdout").unwrap();
         assert_eq!(output, "done");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_blocks_writes_outside_workspace() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let outside = outside_dir.path().join("blocked.txt");
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground(
+                &ws,
+                &[
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("printf blocked > '{}'", outside.display()),
+                ],
+                None,
+                Some(2_000),
+                true,
+            )
+            .unwrap();
+        assert_ne!(result.exit_code, Some(0));
+        assert!(!outside.exists());
     }
 }

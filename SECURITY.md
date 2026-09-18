@@ -21,10 +21,10 @@ The current pre-1.0 implementation includes:
 - owned Unix process groups and bounded background jobs
 - one-time SHA-256-bound execution approval tickets
 - structured read-only Git operations
+- macOS Seatbelt execution when /usr/bin/sandbox-exec is available, with deny-by-default policy and workspace-scoped writes
 
 The following architecture components are not yet implemented:
 
-- macOS sandbox enforcement
 - secret redaction
 - adversarial sandbox coverage and a hardened command policy
 

@@ -3,6 +3,7 @@ use crate::git;
 use crate::jobs::JobManager;
 use crate::patch;
 use crate::permission::{ExecAuthorization, PermissionEngine};
+use crate::sandbox::SandboxBackend;
 use crate::search;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
@@ -325,24 +326,27 @@ fn call_tool(
                 cwd: cwd.map(ToOwned::to_owned),
                 background,
             };
-            if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
-                permissions
-                    .consume_exec(approval_id, &authorization)
-                    .map_err(|error| json!({"code": -32032, "message": error.to_string()}))?;
-            } else {
-                let approval = permissions.request_exec(&authorization);
-                let value = serde_json::to_value(approval)
-                    .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
-                return Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": json!({"status": "approval_required", "approval": value}).to_string()
-                    }]
-                }));
+            let sandbox = SandboxBackend::detect();
+            if !sandbox.enforced() {
+                if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
+                    permissions
+                        .consume_exec(approval_id, &authorization)
+                        .map_err(|error| json!({"code": -32032, "message": error.to_string()}))?;
+                } else {
+                    let approval = permissions.request_exec(&authorization);
+                    let value = serde_json::to_value(approval)
+                        .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
+                    return Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": json!({"status": "approval_required", "approval": value}).to_string()
+                        }]
+                    }));
+                }
             }
             let value = if background {
                 serde_json::to_value(
-                    exec::background(jobs, workspace, &argv, cwd)
+                    exec::background(jobs, workspace, &argv, cwd, sandbox.enforced())
                         .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
                 )
             } else {
@@ -353,6 +357,7 @@ fn call_tool(
                         &argv,
                         cwd,
                         arguments.get("timeout_ms").and_then(Value::as_u64),
+                        sandbox.enforced(),
                     )
                     .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
                 )
