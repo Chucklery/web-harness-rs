@@ -72,6 +72,13 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
 
     let (tunnel_id, api_key, shell_backup_path) = if credentials_requested {
         let interactive = io::stdin().is_terminal();
+        if interactive && (options.tunnel_id.is_none() || options.api_key.is_none()) {
+            eprintln!(
+                "warning: web-harness will store CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY as plaintext in {}",
+                zshrc_path()?.display()
+            );
+            eprintln!("the managed .zshrc file is written with owner-only permissions (0600)");
+        }
         let tunnel_id = match options.tunnel_id {
             Some(value) => value,
             None if interactive => prompt_line("OpenAI tunnel_id: ")?,
@@ -138,6 +145,7 @@ pub fn format_setup_result(result: &SetupResult) -> String {
         format!("workspace: {}", result.workspace),
         format!("config: {}", result.config_path),
         format!("shell config: {}", result.shell_config_path),
+        "credential storage: plaintext managed .zshrc block (mode 0600)".to_string(),
         format!("tunnel_id: {}", result.tunnel_id),
         format!(
             "api_key: {}",
@@ -294,10 +302,7 @@ fi
 
 mcp_command="$(printf '%q' "$WEB_HARNESS_SERVER_BIN") serve --stdio --workspace $(printf '%q' "$WEB_HARNESS_WORKSPACE")"
 
-exec tunnel-client run \
-  --control-plane.tunnel-id="$CONTROL_PLANE_TUNNEL_ID" \
-  --control-plane.api-key="env:CONTROL_PLANE_API_KEY" \
-  --mcp.command="$mcp_command"
+exec tunnel-client run --mcp.command="$mcp_command"
 "#
 }
 
@@ -469,6 +474,14 @@ mod tests {
     }
 
     #[test]
+    fn validates_api_key_input_shape() {
+        validate_api_key("dummy-runtime-key").unwrap();
+        assert!(validate_api_key("").is_err());
+        assert!(validate_api_key("bad\nkey").is_err());
+        assert!(validate_api_key("bad\0key").is_err());
+    }
+
+    #[test]
     fn managed_block_is_idempotent_and_updates_values() {
         let first = replace_managed_block(
             "export PATH=/bin\n",
@@ -556,8 +569,10 @@ mod tests {
     #[test]
     fn generated_wrapper_references_env_not_secret_literal() {
         let script = tunnel_wrapper_script();
-        assert!(script.contains("env:CONTROL_PLANE_API_KEY"));
+        assert!(script.contains("CONTROL_PLANE_API_KEY"));
         assert!(script.contains("CONTROL_PLANE_TUNNEL_ID"));
+        assert!(script.contains("tunnel-client run"));
+        assert!(script.contains("--mcp.command"));
         assert!(!script.contains("sk-"));
     }
 }
