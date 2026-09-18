@@ -44,8 +44,39 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build locked release
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}".Substring(1)
+          ./scripts/package-release.ps1 -Target "${{ matrix.target }}" -Version $version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -71,7 +102,7 @@ jobs:
         shell: bash
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS dist/web-harness.rb --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/web-harness.rb --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS dist/web-harness.rb --generate-notes
+            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/web-harness.rb --generate-notes
           fi
