@@ -38,9 +38,12 @@ Executes an argv-based command inside the workspace. Shell-string mode is intent
 
 Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job output is spilled to temporary files rather than accumulated without bound in memory. Owned process groups are terminated when the host exits.
 
+### git
+
+Provides structured read-only status, diff, log, and show actions. Arbitrary Git argv and remote mutation are intentionally not exposed.
+
 ## Planned
 
-- structured Git
 - approval handling
 
 Planned capabilities are not exposed until their security model and tests are in place.

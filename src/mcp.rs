@@ -1,4 +1,5 @@
 use crate::exec;
+use crate::git;
 use crate::jobs::JobManager;
 use crate::patch;
 use crate::search;
@@ -143,6 +144,22 @@ fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Res
                         "stream": {"type": "string", "enum": ["stdout", "stderr"]}
                     },
                     "required": ["action", "id"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "git",
+                "description": "Run structured read-only Git operations.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["status", "diff", "log", "show"]},
+                        "staged": {"type": "boolean"},
+                        "pathspec": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "revision": {"type": "string", "maxLength": 256}
+                    },
+                    "required": ["action"],
                     "additionalProperties": false
                 }
             }
@@ -328,6 +345,49 @@ fn call_tool(params: &Value, workspace: &Workspace, jobs: &mut JobManager) -> Re
                     return Err(json!({"code": -32602, "message": "unknown job action"}));
                 }
             };
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "git" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
+                || json!({"code": -32602, "message": "arguments.action is required"}),
+            )?;
+            let result = match action {
+                "status" => git::status(workspace),
+                "diff" => {
+                    let staged = arguments
+                        .get("staged")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let pathspec = arguments
+                        .get("pathspec")
+                        .and_then(Value::as_array)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    git::diff(workspace, staged, &pathspec)
+                }
+                "log" => git::log(
+                    workspace,
+                    arguments.get("limit").and_then(Value::as_u64).unwrap_or(20),
+                ),
+                "show" => {
+                    let revision = arguments
+                        .get("revision")
+                        .and_then(Value::as_str)
+                        .unwrap_or("HEAD");
+                    git::show(workspace, revision)
+                }
+                _ => return Err(json!({"code": -32602, "message": "unknown git action"})),
+            }
+            .map_err(|error| json!({"code": -32040, "message": error.to_string()}))?;
+            let value = serde_json::to_value(result)
+                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
             Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
