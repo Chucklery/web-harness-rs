@@ -25,7 +25,7 @@ jobs:
       - uses: taiki-e/install-action@mdbook
       - run: mdbook build docs
       - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/book
 
