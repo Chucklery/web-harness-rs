@@ -1,0 +1,23 @@
+# Summary
+
+- [Overview](README.md)
+- [Installation](installation.md)
+- [Quick Start](quick-start.md)
+- [Architecture](architecture.md)
+- [Configuration](configuration.md)
+- [ChatGPT Web and Secure MCP Tunnel](tunnel.md)
+- [MCP Tool Model](mcp.md)
+- [Security Model](security.md)
+- [Development](development.md)
+- [Testing](testing.md)
+- [Troubleshooting](troubleshooting.md)
+- [Release Process](release.md)
+- [Roadmap](roadmap.md)
+- [Architecture Decision Records](adr/README.md)
+  - [0001 ChatGPT is the agent](adr/0001-chatgpt-is-the-agent.md)
+  - [0002 Use OpenAI Secure MCP Tunnel](adr/0002-secure-mcp-tunnel.md)
+  - [0003 Use Rust for the local host](adr/0003-rust-local-host.md)
+  - [0004 Use stdio MCP locally](adr/0004-stdio-mcp.md)
+  - [0005 Do not depend on codex-core](adr/0005-no-codex-core.md)
+  - [0006 Bound resources and share permission policy](adr/0006-bounded-resources.md)
+

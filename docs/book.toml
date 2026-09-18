@@ -1,0 +1,14 @@
+[book]
+title = "web-harness"
+description = "Lightweight local Codex-style execution host for ChatGPT Web"
+authors = ["web-harness contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+no-section-label = true
+
