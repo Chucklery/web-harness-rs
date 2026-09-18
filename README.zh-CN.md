@@ -20,13 +20,13 @@ web-harness
 本地代码仓库
 ~~~
 
-> 当前状态：pre-1.0。面向用户的连接生命周期、macOS Seatbelt、approval、结构化 Git 写操作、release 打包和 benchmark gate 已实现。正式公开仓库/Homebrew Tap、真实 ChatGPT Secure MCP Tunnel 生产验收，以及 8 GiB Apple Silicon 实机证据仍是发布 Gate。
+> 当前状态：pre-1.0。面向用户的连接生命周期、macOS Seatbelt、approval、结构化 Git 写操作、release 打包和 benchmark gate 已实现。正式 Homebrew Tap、真实 ChatGPT Secure MCP Tunnel 生产验收，以及 8 GiB Apple Silicon 实机证据仍是发布 Gate。
 
 ## 安装
 
 从 GitHub Release 下载对应平台压缩包，使用 SHA256SUMS 校验后，把 web-harness 放入 PATH。
 
-Release 同时会生成 Homebrew Formula。等公开仓库地址固定后，再提供正式 Tap。
+正式仓库地址为 https://github.com/Chucklery/web-harness-rs。Release 同时会生成 Homebrew Formula；独立 Tap 尚未发布。
 
 开发者也可以源码构建：
 

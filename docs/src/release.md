@@ -54,7 +54,7 @@ cargo build --release --locked --target "$host_target"
 The Homebrew renderer expects checksums for all release targets:
 
 ~~~bash
-./scripts/render-homebrew-formula.sh 0.1.0 owner/repository dist dist/web-harness.rb
+./scripts/render-homebrew-formula.sh 0.1.0 dist dist/web-harness.rb
 ~~~
 
 ## Publishing

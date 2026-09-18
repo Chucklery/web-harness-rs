@@ -30,13 +30,13 @@ install -m 755 web-harness ~/.local/bin/web-harness
 
 The release workflow renders a version-specific Homebrew formula from the checked-in template and release checksums.
 
-Until the canonical public tap exists, download the generated formula from the release and install it explicitly:
+The canonical source repository is https://github.com/Chucklery/web-harness-rs. Until a dedicated Homebrew tap is published, download the generated formula from the release and install it explicitly:
 
 ~~~bash
 brew install --formula ./web-harness.rb
 ~~~
 
-Once the public repository/tap is fixed, the normal Homebrew command can replace this manual formula step.
+A dedicated Homebrew tap is not published yet; the release formula remains the supported Homebrew installation path for now.
 
 ## From source
 
@@ -47,7 +47,7 @@ Requirements:
 - macOS or Linux
 
 ~~~bash
-git clone YOUR_REPOSITORY_URL
+git clone https://github.com/Chucklery/web-harness-rs.git
 cd web-harness-rs
 cargo build --release
 ~~~

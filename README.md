@@ -20,13 +20,13 @@ web-harness
 Your local repository
 ~~~
 
-> Status: pre-1.0. The local product workflow, macOS Seatbelt sandbox, approval system, structured Git mutations, release packaging, and benchmark gates are implemented. A public canonical repository/tap, real ChatGPT Secure MCP Tunnel production acceptance evidence, and 8 GiB Apple Silicon evidence are still release gates.
+> Status: pre-1.0. The local product workflow, macOS Seatbelt sandbox, approval system, structured Git mutations, release packaging, and benchmark gates are implemented. A dedicated Homebrew tap, real ChatGPT Secure MCP Tunnel production acceptance evidence, and 8 GiB Apple Silicon evidence are still release gates.
 
 ## Install
 
 Download the archive for your platform from a GitHub Release, verify SHA256SUMS, and put web-harness on PATH.
 
-A generated Homebrew formula is included with releases. A dedicated public tap will be documented once the canonical repository is fixed.
+The canonical repository is https://github.com/Chucklery/web-harness-rs. A generated Homebrew formula is included with releases; a dedicated tap is not published yet.
 
 Developers can also build from source:
 
