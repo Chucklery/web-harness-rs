@@ -13,7 +13,7 @@ The current schema stores:
 
 - schema version
 - a default/setup workspace
-- optional tunnel wrapper argv
+- optional custom tunnel command argv
 
 Normal setup is interactive:
 
@@ -36,7 +36,7 @@ The target is ~/.zshrc, or ZDOTDIR/.zshrc when ZDOTDIR is set.
 
 The update is idempotent: repeated setup replaces this block instead of appending duplicates. The file is atomically rewritten with mode 0600. Before an update, web-harness creates a private backup with the managed secret block removed so old API keys are not duplicated into backup files.
 
-The generated wrapper lives next to config.json and contains no API-key literal. connect reads the managed block directly, injects the two environment variables, and launches the bundled OpenAI tunnel-client, so a new terminal or manual source ~/.zshrc is not required.
+The default path does not generate a wrapper. connect reads the managed credential file directly, injects the two control-plane environment variables, resolves the bundled/installed OpenAI tunnel-client, and launches it directly. A new terminal or manual source ~/.zshrc is not required.
 
 ### Plaintext warning
 
@@ -87,7 +87,7 @@ web-harness connect
 
 Use --workspace to override the current directory explicitly.
 
-## Tunnel wrapper contract
+## Advanced custom tunnel command contract
 
 The configured wrapper receives three environment variables:
 
@@ -99,4 +99,4 @@ The wrapper is responsible for invoking the current official OpenAI Secure MCP T
 
 This indirection is intentional because official tunnel CLI flags and UI can evolve independently from web-harness.
 
-The automatically generated wrapper relies on the official CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY environment variables and invokes the bundled tunnel-client with the stdio MCP binding. Source builds may fall back to a developer-provided tunnel-client on PATH.
+The default launch path relies on the official CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY environment variables and invokes the resolved tunnel-client with the stdio MCP binding. Advanced users may still configure a custom wrapper/argv. Source builds may fall back to a developer-provided tunnel-client on PATH.

@@ -8,24 +8,40 @@ Run setup first:
 web-harness setup
 ~~~
 
-Official release and Homebrew packages include tunnel-client. If setup says it is unavailable, reinstall web-harness because the installation is incomplete. Source builds may use a developer-provided tunnel-client on PATH.
+Official release and Homebrew packages include tunnel-client. If setup says it is unavailable, first run `web-harness setup --show` and inspect the reported `tunnel-client path`. v0.3+ searches PATH, release-bundle libexec paths, Homebrew Cellar/opt layouts, Intel `/usr/local`, and Apple Silicon `/opt/homebrew`. If no path is resolved, reinstall the matching web-harness package. Source builds may use a developer-provided tunnel-client on PATH or WEB_HARNESS_TUNNEL_CLIENT_BIN.
 
 ## I changed the key but connect still fails
 
-Run interactive setup again. web-harness replaces its managed ~/.zshrc block rather than appending duplicates:
+Run interactive setup again. On macOS/Linux web-harness replaces its managed ~/.zshrc block rather than appending duplicates; Windows updates the current user's credentials.env block:
 
 ~~~bash
 web-harness setup
 web-harness setup --show
 ~~~
 
-connect reads the managed block directly, so you do not need to open a new terminal or source ~/.zshrc.
+connect reads the managed credential file directly, so you do not need to open a new terminal or source ~/.zshrc.
 
 ## Where is my API key stored?
 
-In the default convenience flow it is plaintext in the web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc). It is not stored in config.json or the generated tunnel wrapper.
+On macOS/Linux it is plaintext in the web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc). On Windows it is plaintext in `%APPDATA%\\web-harness\\credentials.env` when APPDATA is available. It is not stored in config.json or a tunnel wrapper.
 
-The shell file is rewritten with mode 0600. Backups created by web-harness omit the managed secret block.
+On Unix the shell file is rewritten with mode 0600. Backups created by web-harness omit the managed secret block.
+
+## connect cannot find tunnel-client on Intel macOS 13
+
+Use:
+
+~~~bash
+web-harness setup --show
+brew --prefix
+brew list web-harness
+~~~
+
+For Homebrew installs, v0.3+ resolves both the real Cellar executable path and the `/usr/local/opt/web-harness/libexec/web-harness/tunnel-client` layout used by Intel Homebrew. Reinstalling v0.2 does not fix the old resolver; use a v0.3+ build.
+
+## OpenAI/GitHub tunnel-client download fails during packaging
+
+The packaging scripts use `https://persistent.oaistatic.com/tunnel-client/` as the primary official download source and GitHub Releases only as a fallback. Both paths are pinned to the same upstream version and SHA256. A checksum mismatch always fails packaging instead of silently accepting another binary.
 
 ## connect says the tunnel command is not configured
 
@@ -59,9 +75,9 @@ The previously recorded tunnel PID no longer exists. web-harness removes stale s
 
 Run connect again.
 
-## the tunnel wrapper exits immediately
+## the tunnel process exits immediately
 
-Normal connect intentionally discards wrapper stdout/stderr so credentials or authentication output are not persisted.
+Normal connect intentionally discards tunnel stdout/stderr so credentials or authentication output are not persisted.
 
 Use the bounded diagnostic commands instead:
 
@@ -101,4 +117,4 @@ The MCP protocol uses stdout. Diagnostic logging must go to stderr. Avoid printi
 
 ## Secure MCP Tunnel does not connect
 
-First run tunnel doctor to verify the local stdio MCP contract. Then use setup --show to verify that tunnel_id, API-key presence, and bundled tunnel-client availability are configured. The generated wrapper uses the official control-plane environment variables and the stdio MCP command binding.
+First run tunnel doctor to verify the local stdio MCP contract. Then use setup --show to verify that tunnel_id, API-key presence, the resolved bundled tunnel-client path, and the selected workspace are correct. The default path launches the official client directly with the control-plane environment variables and stdio MCP command binding.

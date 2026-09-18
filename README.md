@@ -20,11 +20,19 @@ web-harness
 Your local repository
 ~~~
 
-> Status: pre-1.0. The local product workflow, macOS Seatbelt sandbox, approval system, structured Git mutations, release packaging, Homebrew tap, and benchmark gates are implemented. Real ChatGPT Secure MCP Tunnel production acceptance evidence and 8 GiB Apple Silicon evidence are still release gates.
+> Status: pre-1.0. The local product workflow, macOS Seatbelt sandbox, approval system, structured Git mutations, multi-platform release packaging, Homebrew tap, and benchmark gates are implemented. Real ChatGPT Secure MCP Tunnel production acceptance evidence and 8 GiB Apple Silicon evidence are still release gates.
 
 ## Install
 
 Download the archive for your platform from a GitHub Release and verify SHA256SUMS. Release archives include the matching official OpenAI tunnel-client runtime, so users do not install tunnel-client separately.
+
+Supported release targets:
+
+- macOS Intel: x86_64-apple-darwin, including Intel Macs on macOS 13
+- macOS Apple Silicon: aarch64-apple-darwin for M1/M2/M3/M4
+- Windows 10/11 x64: x86_64-pc-windows-msvc
+- Windows 11 ARM64: aarch64-pc-windows-msvc
+- Linux x86_64: x86_64-unknown-linux-gnu
 
 The canonical repository is https://github.com/Chucklery/web-harness-rs.
 
@@ -44,7 +52,7 @@ cargo build --release
 
 ## First-time setup
 
-For the normal macOS/zsh flow, setup is interactive:
+setup is interactive on macOS, Windows, and Linux:
 
 ~~~bash
 cd ~/code/my-project
@@ -63,7 +71,7 @@ setup prints the current OpenAI Platform locations before prompting:
 - tunnel_id: https://platform.openai.com/settings/organization/tunnels
 - runtime API key: https://platform.openai.com/settings/organization/api-keys
 
-The API key prompt disables terminal echo. web-harness stores CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a managed block in ~/.zshrc (or ZDOTDIR/.zshrc), generates its tunnel wrapper automatically, and keeps the API key out of config.json and the wrapper itself.
+The API key prompt disables terminal echo. On macOS/Linux, web-harness stores CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a managed block in ~/.zshrc (or ZDOTDIR/.zshrc). On Windows, it stores them in the current user's web-harness credentials.env file under APPDATA. The default flow launches the bundled official tunnel-client directly; no generated wrapper is required.
 
 This is intentionally convenience-first: ~/.zshrc contains the API key in plaintext. web-harness changes the managed file to mode 0600 and makes a private backup before updates, but users who do not want plaintext shell configuration should keep using a custom wrapper or external secret mechanism instead.
 
@@ -92,7 +100,7 @@ cd ~/code/another-project
 web-harness connect
 ~~~
 
-connect uses the current directory as the workspace, starts the bundled OpenAI tunnel-client through the configured wrapper as an owned process group, persists only non-secret runtime state, and returns immediately.
+connect uses the current directory as the workspace, starts the bundled OpenAI tunnel-client directly as an owned process, persists only non-secret runtime state, and returns immediately.
 
 Check or stop it with:
 
@@ -136,7 +144,7 @@ Git supports structured status, diff, log, show, add, commit, switch, restore, a
 - child environment minimization
 - output secret redaction
 - interactive API-key entry with terminal echo disabled
-- tunnel credentials stored only in the web-harness managed ~/.zshrc block, not config.json or the generated wrapper
+- tunnel credentials stored in the user credential file only, not config.json or command arguments
 - one-time request-bound approvals
 - structured Git mutations
 - no persisted tunnel stdout/stderr during normal connect

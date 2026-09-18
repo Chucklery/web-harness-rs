@@ -20,11 +20,19 @@ web-harness
 本地代码仓库
 ~~~
 
-> 当前状态：pre-1.0。面向用户的连接生命周期、macOS Seatbelt、approval、结构化 Git 写操作、release 打包、Homebrew Tap 和 benchmark gate 已实现。真实 ChatGPT Secure MCP Tunnel 生产验收，以及 8 GiB Apple Silicon 实机证据仍是发布 Gate。
+> 当前状态：pre-1.0。面向用户的连接生命周期、macOS Seatbelt、approval、结构化 Git 写操作、多平台 release 打包、Homebrew Tap 和 benchmark gate 已实现。真实 ChatGPT Secure MCP Tunnel 生产验收，以及 8 GiB Apple Silicon 实机证据仍是发布 Gate。
 
 ## 安装
 
 从 GitHub Release 下载对应平台压缩包并使用 SHA256SUMS 校验。Release 已内置对应平台的 OpenAI 官方 tunnel-client 运行组件，用户不需要再单独安装 tunnel-client。
+
+当前 Release 目标：
+
+- Intel Mac：x86_64-apple-darwin，包含 macOS 13 Intel 机器
+- Apple Silicon Mac：aarch64-apple-darwin，适用于 M1/M2/M3/M4
+- Windows 10/11 x64：x86_64-pc-windows-msvc
+- Windows 11 ARM64：aarch64-pc-windows-msvc
+- Linux x86_64：x86_64-unknown-linux-gnu
 
 正式仓库地址为 https://github.com/Chucklery/web-harness-rs。
 
@@ -44,7 +52,7 @@ cargo build --release
 
 ## 第一次配置
 
-普通 macOS/zsh 用户直接使用交互式 setup：
+macOS、Windows 和 Linux 均直接使用交互式 setup：
 
 ~~~bash
 cd ~/code/my-project
@@ -63,7 +71,7 @@ setup 在输入前会直接提示获取地址：
 - tunnel_id：https://platform.openai.com/settings/organization/tunnels
 - runtime API key：https://platform.openai.com/settings/organization/api-keys
 
-输入 API key 时终端不会回显。web-harness 会把 CONTROL_PLANE_TUNNEL_ID 和 CONTROL_PLANE_API_KEY 写入 ~/.zshrc（若设置了 ZDOTDIR，则写入 ZDOTDIR/.zshrc）中的受控 block，同时自动生成 tunnel wrapper；API key 不会写入 config.json 或 wrapper。
+输入 API key 时终端不会回显。macOS/Linux 会把 CONTROL_PLANE_TUNNEL_ID 和 CONTROL_PLANE_API_KEY 写入 ~/.zshrc（若设置了 ZDOTDIR，则写入 ZDOTDIR/.zshrc）中的受控 block；Windows 会写入当前用户 APPDATA 下的 web-harness/credentials.env。默认流程直接启动随安装包附带的 OpenAI 官方 tunnel-client，不再依赖自动生成的 wrapper。
 
 这是便利优先的方案：API key 会以明文存在于 ~/.zshrc。web-harness 会把该文件权限设为 0600，并在更新前创建私有备份；如果不接受明文 shell 配置，应继续使用自定义 wrapper 或其他 secret 管理方式。
 
@@ -92,7 +100,7 @@ cd ~/code/another-project
 web-harness connect
 ~~~
 
-connect 默认把当前目录作为 workspace，通过已配置的 wrapper 启动随 web-harness 安装的官方 tunnel-client，并只持久化非敏感运行状态。
+connect 默认把当前目录作为 workspace，直接启动随 web-harness 安装的官方 tunnel-client，并只持久化非敏感运行状态。
 
 查看和断开：
 
@@ -136,7 +144,7 @@ Git 支持结构化 status / diff / log / show / add / commit / switch / restore
 - 子进程环境变量最小化
 - 输出敏感信息脱敏
 - API key 交互输入时关闭终端回显
-- Tunnel 凭据只写入 web-harness 管理的 ~/.zshrc block，不写入 config.json 或自动生成的 wrapper
+- Tunnel 凭据只写入当前用户的 credential 文件，不写入 config.json 或命令参数
 - approval 与具体请求绑定且一次性消费
 - Git mutation 结构化
 - 普通 connect 不把 Tunnel stdout/stderr 持久化到磁盘

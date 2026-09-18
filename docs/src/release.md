@@ -30,7 +30,7 @@ Publishing and GitHub release creation are intentionally separate from CI valida
 
 ## Release artifacts
 
-The tag-triggered `.github/workflows/release.yml` builds locked release binaries for Linux x86_64, macOS Intel, and macOS Apple Silicon.
+The tag-triggered `.github/workflows/release.yml` builds locked release binaries for Linux x86_64, macOS Intel, macOS Apple Silicon, Windows x64, and Windows ARM64.
 
 Each target is packaged with:
 
@@ -54,13 +54,13 @@ Use the same packaging script as CI:
 ~~~bash
 host_target="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --release --locked --target "$host_target"
-./scripts/package-release.sh "$host_target" 0.2.0
+./scripts/package-release.sh "$host_target" 0.3.0
 ~~~
 
 The Homebrew renderer expects checksums for all release targets:
 
 ~~~bash
-./scripts/render-homebrew-formula.sh 0.2.0 dist dist/web-harness.rb
+./scripts/render-homebrew-formula.sh 0.3.0 dist dist/web-harness.rb
 ~~~
 
 ## Publishing

@@ -9,8 +9,12 @@ Tagged releases are configured to publish archives for:
 - x86_64-unknown-linux-gnu
 - x86_64-apple-darwin
 - aarch64-apple-darwin
+- x86_64-pc-windows-msvc
+- aarch64-pc-windows-msvc
 
 Each release includes per-archive SHA256 files plus an aggregate SHA256SUMS. Every platform archive also contains the matching official OpenAI tunnel-client runtime and its upstream license/SPDX material under libexec/web-harness/.
+
+Windows releases are ZIP archives containing web-harness.exe and the matching bundled OpenAI tunnel-client.exe runtime under libexec/web-harness/.
 
 After downloading the archive for your platform:
 
@@ -49,13 +53,15 @@ brew install web-harness
 
 The release workflow also renders a version-specific Homebrew formula from the checked-in template and release checksums.
 
+The same formula supports both Intel Homebrew under /usr/local and Apple Silicon Homebrew under /opt/homebrew.
+
 ## From source
 
 Requirements:
 
 - Rust 1.80 or newer
 - Git
-- macOS or Linux
+- macOS, Linux, or Windows
 
 ~~~bash
 git clone https://github.com/Chucklery/web-harness-rs.git
@@ -76,7 +82,7 @@ web-harness setup
 web-harness connect
 ~~~
 
-setup points to https://platform.openai.com/ for the OpenAI tunnel_id and runtime API key, writes them to the managed zsh configuration block, and generates the tunnel wrapper automatically. No separate tunnel-client installation step is required.
+setup points to https://platform.openai.com/ for the OpenAI tunnel_id and runtime API key. On macOS/Linux it persists them in the managed zsh configuration block; on Windows it uses the current user's web-harness credentials.env file. The default flow launches the bundled official tunnel-client directly. No separate tunnel-client installation step is required.
 
 See Quick Start for the daily workflow.
 

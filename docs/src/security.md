@@ -28,7 +28,7 @@ Process stdout/stderr and externally injected tunnel acceptance output are passe
 
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
-For first-use convenience, interactive setup can persist CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc). API-key input disables terminal echo; the API key is not copied into config.json or the generated tunnel wrapper. The shell file is rewritten atomically with mode 0600.
+For first-use convenience, interactive setup persists CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a user credential file. On macOS/Linux this is a web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc), rewritten atomically with mode 0600. On Windows it is a plaintext credentials.env file under the current user's APPDATA when available. API-key input disables terminal echo, and the API key is not copied into config.json or tunnel command arguments.
 
 This is still plaintext credential storage. A local process or user that can read the shell file can recover the API key. Non-interactive --api-key is also less private because command-line arguments may enter shell history or be visible to local process inspection. Users with stronger secret-management requirements should use a custom wrapper or another external secret store.
 
