@@ -32,7 +32,7 @@ Applies bounded Codex-style Add File, Update File, and Delete File operations. P
 
 ### exec
 
-Executes an argv-based command inside the workspace. Shell-string mode is intentionally absent. Foreground commands have a maximum 10 minute timeout and return at most 256 KiB from each output stream. Background execution is limited to two concurrent jobs.
+Executes an argv-based command inside the workspace. Shell-string mode is intentionally absent. Foreground commands have a maximum 10 minute timeout and return at most 256 KiB from each output stream. Background execution is limited to two concurrent jobs. Until an OS sandbox backend is enabled, every execution first returns an approval ticket; the same request must be retried with its approved approval_id.
 
 ### job
 
@@ -42,9 +42,11 @@ Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job o
 
 Provides structured read-only status, diff, log, and show actions. Arbitrary Git argv and remote mutation are intentionally not exposed.
 
-## Planned
+### permission
 
-- approval handling
+Approves or denies one-time execution tickets. Tickets expire after five minutes, are SHA-256 bound to argv/cwd/background plus a per-process random secret, and are consumed after one successful authorization.
+
+## Planned
 
 Planned capabilities are not exposed until their security model and tests are in place.
 

@@ -16,7 +16,7 @@ The current workspace layer:
 - therefore rejects ordinary parent traversal and symlink escape for file reads
 - enforces hard read-size limits
 
-The execution layer additionally uses argv-based spawning, workspace-bounded cwd resolution, bounded returned output, Unix process groups, host-owned background jobs, and hard concurrency/timeout limits.
+The execution layer additionally uses argv-based spawning, workspace-bounded cwd resolution, bounded returned output, Unix process groups, host-owned background jobs, hard concurrency/timeout limits, and one-time cryptographically bound approval tickets.
 
 ## Not implemented yet
 
@@ -25,7 +25,6 @@ The current bootstrap does not yet provide:
 - macOS Seatbelt sandboxing
 - network policy
 - command policy
-- approval tickets
 - patch authorization
 - secret redaction
 - OS-level sandbox enforcement for spawned processes

@@ -2,6 +2,7 @@ use crate::exec;
 use crate::git;
 use crate::jobs::JobManager;
 use crate::patch;
+use crate::permission::{ExecAuthorization, PermissionEngine};
 use crate::search;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     let mut jobs = JobManager::new();
+    let mut permissions = PermissionEngine::new()?;
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -40,7 +42,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
             Ok(request) if request.id.is_none() && request.method.starts_with("notifications/") => {
                 continue;
             }
-            Ok(request) => handle(request, &workspace, &mut jobs),
+            Ok(request) => handle(request, &workspace, &mut jobs, &mut permissions),
             Err(error) => Response {
                 jsonrpc: "2.0",
                 id: None,
@@ -55,7 +57,12 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Response {
+fn handle(
+    request: Request,
+    workspace: &Workspace,
+    jobs: &mut JobManager,
+    permissions: &mut PermissionEngine,
+) -> Response {
     if request.jsonrpc != "2.0" {
         return Response {
             jsonrpc: "2.0",
@@ -127,7 +134,8 @@ fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Res
                         "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 64},
                         "cwd": {"type": "string"},
                         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
-                        "background": {"type": "boolean"}
+                        "background": {"type": "boolean"},
+                        "approval_id": {"type": "string"}
                     },
                     "required": ["argv"],
                     "additionalProperties": false
@@ -162,9 +170,22 @@ fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Res
                     "required": ["action"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "permission",
+                "description": "Approve or deny a one-time execution approval ticket.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["approve", "deny"]},
+                        "id": {"type": "string"}
+                    },
+                    "required": ["action", "id"],
+                    "additionalProperties": false
+                }
             }
         ]})),
-        "tools/call" => call_tool(&request.params, workspace, jobs),
+        "tools/call" => call_tool(&request.params, workspace, jobs, permissions),
         method => Err(json!({"code": -32601, "message": format!("method not found: {method}")})),
     };
     match result {
@@ -183,7 +204,12 @@ fn handle(request: Request, workspace: &Workspace, jobs: &mut JobManager) -> Res
     }
 }
 
-fn call_tool(params: &Value, workspace: &Workspace, jobs: &mut JobManager) -> Result<Value, Value> {
+fn call_tool(
+    params: &Value,
+    workspace: &Workspace,
+    jobs: &mut JobManager,
+    permissions: &mut PermissionEngine,
+) -> Result<Value, Value> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -291,6 +317,26 @@ fn call_tool(params: &Value, workspace: &Workspace, jobs: &mut JobManager) -> Re
                 .get("background")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let authorization = ExecAuthorization {
+                argv: argv.clone(),
+                cwd: cwd.map(ToOwned::to_owned),
+                background,
+            };
+            if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
+                permissions
+                    .consume_exec(approval_id, &authorization)
+                    .map_err(|error| json!({"code": -32032, "message": error.to_string()}))?;
+            } else {
+                let approval = permissions.request_exec(&authorization);
+                let value = serde_json::to_value(approval)
+                    .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
+                return Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": json!({"status": "approval_required", "approval": value}).to_string()
+                    }]
+                }));
+            }
             let value = if background {
                 serde_json::to_value(
                     exec::background(jobs, workspace, &argv, cwd)
@@ -389,6 +435,30 @@ fn call_tool(params: &Value, workspace: &Workspace, jobs: &mut JobManager) -> Re
             let value = serde_json::to_value(result)
                 .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
             Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "permission" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
+                || json!({"code": -32602, "message": "arguments.action is required"}),
+            )?;
+            let id = arguments
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.id is required"}))?;
+            match action {
+                "approve" => permissions
+                    .approve(id)
+                    .map_err(|error| json!({"code": -32033, "message": error.to_string()}))?,
+                "deny" => permissions
+                    .deny(id)
+                    .map_err(|error| json!({"code": -32033, "message": error.to_string()}))?,
+                _ => {
+                    return Err(json!({"code": -32602, "message": "unknown permission action"}));
+                }
+            }
+            Ok(
+                json!({"content": [{"type": "text", "text": json!({"status": "ok", "id": id}).to_string()}]}),
+            )
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
     }

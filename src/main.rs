@@ -6,6 +6,8 @@ mod git;
 mod jobs;
 mod mcp;
 mod patch;
+mod permission;
+mod sandbox;
 mod search;
 mod workspace;
 
@@ -65,8 +67,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("[OK] workspace: {}", workspace.root().display());
             println!("[OK] path guard: enabled");
             println!("[OK] MCP transport: stdio");
-            println!("[INFO] sandbox: not implemented yet");
-            println!("[INFO] approval engine: not implemented yet");
+            println!("[INFO] sandbox: {}", sandbox::status());
+            println!("[OK] approval engine: enabled for process execution");
         }
         Command::Workspace { command } => match command {
             WorkspaceCommand::Check { path } => {
