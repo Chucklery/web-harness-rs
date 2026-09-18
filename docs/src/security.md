@@ -28,6 +28,12 @@ Process stdout/stderr and externally injected tunnel acceptance output are passe
 
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
+## Command policy
+
+The exec path applies a lightweight policy before process creation. It rejects executable paths containing parent traversal and direct host-control executables such as shutdown/reboot, disk-management/formatting tools, and privilege-escalation front doors. It intentionally does not ban ordinary developer commands such as git, cargo, or file deletion inside the sandbox because the workspace/sandbox boundary is the primary authority boundary.
+
+The macOS test suite exercises four concrete Seatbelt properties: workspace-outside writes are denied, local network connections are denied, workspace and temporary writes are allowed, and system files/tools remain readable.
+
 ## Not implemented yet
 
 The current bootstrap does not yet provide:

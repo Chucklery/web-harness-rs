@@ -1,3 +1,4 @@
+use crate::command_policy;
 use crate::redact;
 use crate::sandbox;
 use crate::workspace::{Workspace, WorkspaceError};
@@ -243,6 +244,7 @@ fn validate_argv(argv: &[String]) -> Result<(), JobError> {
     if argv.iter().any(|arg| arg.len() > 16 * 1024) {
         return Err(JobError::Invalid("argument exceeds 16 KiB".into()));
     }
+    command_policy::validate_argv(argv).map_err(|error| JobError::Invalid(error.to_string()))?;
     Ok(())
 }
 
@@ -441,11 +443,32 @@ mod tests {
         assert!(result.stdout_tail.contains("[REDACTED]"));
     }
 
+    #[test]
+    fn command_policy_rejects_host_control_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let manager = JobManager::new();
+        let error = manager
+            .run_foreground(
+                &ws,
+                &["sudo".into(), "true".into()],
+                None,
+                Some(2_000),
+                false,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("host-control executable"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_blocks_writes_outside_workspace() {
         let workspace_dir = tempfile::tempdir().unwrap();
-        let outside_dir = tempfile::tempdir().unwrap();
+        let home = std::env::var_os("HOME").expect("HOME is required for macOS sandbox test");
+        let outside_dir = tempfile::Builder::new()
+            .prefix("web-harness-outside-")
+            .tempdir_in(home)
+            .unwrap();
         let outside = outside_dir.path().join("blocked.txt");
         let ws = Workspace::new(workspace_dir.path()).unwrap();
         let manager = JobManager::new();
@@ -464,5 +487,87 @@ mod tests {
             .unwrap();
         assert_ne!(result.exit_code, Some(0));
         assert!(!outside.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_allows_workspace_and_temp_writes() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let temp_file =
+            std::env::temp_dir().join(format!("web-harness-sandbox-test-{}", std::process::id()));
+        let result = manager
+            .run_foreground(
+                &ws,
+                &[
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!(
+                        "printf workspace > allowed.txt && printf temp > '{}'",
+                        temp_file.display()
+                    ),
+                ],
+                None,
+                Some(2_000),
+                true,
+            )
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr_tail);
+        assert!(workspace_dir.path().join("allowed.txt").exists());
+        assert!(temp_file.exists());
+        let _ = fs::remove_file(temp_file);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_allows_reading_system_tools() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground(
+                &ws,
+                &["/bin/cat".into(), "/etc/hosts".into()],
+                None,
+                Some(2_000),
+                true,
+            )
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr_tail);
+        assert!(!result.stdout_tail.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_blocks_local_network_connections() {
+        use std::net::TcpListener;
+
+        if !std::path::Path::new("/usr/bin/nc").exists() {
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground(
+                &ws,
+                &[
+                    "/usr/bin/nc".into(),
+                    "-z".into(),
+                    "127.0.0.1".into(),
+                    port.to_string(),
+                ],
+                None,
+                Some(2_000),
+                true,
+            )
+            .unwrap();
+        assert_ne!(result.exit_code, Some(0));
+        assert!(listener.accept().is_err());
     }
 }

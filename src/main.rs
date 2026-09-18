@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod benchmark;
+mod command_policy;
 mod exec;
 mod git;
 mod jobs;

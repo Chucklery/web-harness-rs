@@ -58,7 +58,22 @@ fn macos_profile(workspace: &Path) -> String {
     }
 
     let workspace = quoted(workspace);
-    let tmp = quoted(&std::env::temp_dir());
+    let temp_dir = std::env::temp_dir();
+    let tmp = quoted(&temp_dir);
+    let canonical_tmp = temp_dir
+        .canonicalize()
+        .ok()
+        .filter(|path| path != &temp_dir)
+        .map(|path| format!(" (subpath {})", quoted(&path)))
+        .unwrap_or_default();
+    let private_tmp = temp_dir
+        .to_string_lossy()
+        .strip_prefix("/var/")
+        .map(|suffix| {
+            let path = std::path::PathBuf::from(format!("/private/var/{suffix}"));
+            format!(" (subpath {})", quoted(&path))
+        })
+        .unwrap_or_default();
     format!(
         "(version 1) \
          (deny default) \
@@ -67,7 +82,7 @@ fn macos_profile(workspace: &Path) -> String {
          (allow sysctl-read) \
          (allow mach-lookup) \
          (allow file-read*) \
-         (allow file-write* (subpath {workspace}) (subpath {tmp}) (subpath \"/private/tmp\") (subpath \"/tmp\"))"
+         (allow file-write* (subpath {workspace}) (subpath {tmp}){canonical_tmp}{private_tmp} (subpath \"/private/tmp\") (subpath \"/tmp\"))"
     )
 }
 
