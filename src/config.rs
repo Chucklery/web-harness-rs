@@ -34,6 +34,19 @@ impl UserConfig {
             tunnel_command: tunnel_command_json.map(parse_tunnel_command).transpose()?,
         })
     }
+
+    pub fn from_wrapper(workspace: &Path, wrapper: &Path) -> Result<Self, ConfigError> {
+        if !wrapper.is_absolute() || !wrapper.is_file() {
+            return Err(ConfigError::InvalidTunnel(
+                "tunnel wrapper must be an absolute path to an existing file".into(),
+            ));
+        }
+        Ok(Self {
+            schema_version: 1,
+            workspace: workspace.display().to_string(),
+            tunnel_command: Some(vec![wrapper.display().to_string()]),
+        })
+    }
 }
 
 pub fn load_optional() -> Result<Option<UserConfig>, ConfigError> {
@@ -117,6 +130,18 @@ mod tests {
                 .unwrap()
                 .len(),
             3
+        );
+    }
+
+    #[test]
+    fn accepts_absolute_existing_wrapper_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("wrapper");
+        std::fs::write(&wrapper, "").unwrap();
+        let config = UserConfig::from_wrapper(dir.path(), &wrapper).unwrap();
+        assert_eq!(
+            config.tunnel_command.unwrap(),
+            vec![wrapper.display().to_string()]
         );
     }
 }

@@ -41,8 +41,10 @@ enum Command {
     Setup {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "tunnel_wrapper")]
         tunnel_command_json: Option<String>,
+        #[arg(long, value_name = "PATH", conflicts_with = "tunnel_command_json")]
+        tunnel_wrapper: Option<PathBuf>,
     },
     Connect {
         #[arg(long, value_name = "PATH")]
@@ -128,10 +130,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Setup {
             workspace,
             tunnel_command_json,
+            tunnel_wrapper,
         } => {
             let workspace = workspace::Workspace::new(workspace)?;
-            let user_config =
-                config::UserConfig::from_inputs(workspace.root(), tunnel_command_json.as_deref())?;
+            let user_config = match tunnel_wrapper {
+                Some(wrapper) => config::UserConfig::from_wrapper(workspace.root(), &wrapper)?,
+                None => config::UserConfig::from_inputs(
+                    workspace.root(),
+                    tunnel_command_json.as_deref(),
+                )?,
+            };
             let path = config::save(&user_config)?;
             println!("Configured web-harness.");
             println!("workspace: {}", user_config.workspace);
