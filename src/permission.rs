@@ -59,6 +59,22 @@ impl PermissionEngine {
     }
 
     pub fn request_exec(&mut self, request: &ExecAuthorization) -> ApprovalRequest {
+        self.request_action(
+            request,
+            format!(
+                "Run {}",
+                request.argv.first().map(String::as_str).unwrap_or("?")
+            ),
+            "OS sandbox enforcement is not enabled; explicit approval is required".into(),
+        )
+    }
+
+    pub fn request_action(
+        &mut self,
+        request: &ExecAuthorization,
+        summary: String,
+        reason: String,
+    ) -> ApprovalRequest {
         self.cleanup();
         let id = format!(
             "apr_{}_{}",
@@ -75,11 +91,8 @@ impl PermissionEngine {
         );
         ApprovalRequest {
             id,
-            summary: format!(
-                "Run {}",
-                request.argv.first().map(String::as_str).unwrap_or("?")
-            ),
-            reason: "OS sandbox enforcement is not enabled; explicit approval is required".into(),
+            summary,
+            reason,
             expires_in_seconds: TICKET_TTL.as_secs(),
         }
     }

@@ -158,15 +158,20 @@ fn handle(
             },
             {
                 "name": "git",
-                "description": "Run structured read-only Git operations.",
+                "description": "Run structured Git operations. Mutating actions require one-time approval.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["status", "diff", "log", "show"]},
+                        "action": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "switch", "restore", "push"]},
                         "staged": {"type": "boolean"},
                         "pathspec": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                        "revision": {"type": "string", "maxLength": 256}
+                        "revision": {"type": "string", "maxLength": 256},
+                        "message": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "branch": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "remote": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "refspec": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "approval_id": {"type": "string"}
                     },
                     "required": ["action"],
                     "additionalProperties": false
@@ -406,26 +411,66 @@ fn call_tool(
             let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
                 || json!({"code": -32602, "message": "arguments.action is required"}),
             )?;
+            let staged = arguments
+                .get("staged")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let pathspec = arguments
+                .get("pathspec")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let message = arguments.get("message").and_then(Value::as_str);
+            let branch = arguments.get("branch").and_then(Value::as_str);
+            let remote = arguments.get("remote").and_then(Value::as_str);
+            let refspec = arguments.get("refspec").and_then(Value::as_str);
+
+            if matches!(action, "add" | "commit" | "switch" | "restore" | "push") {
+                let argv =
+                    git::mutation_argv(action, staged, &pathspec, message, branch, remote, refspec)
+                        .map_err(|error| json!({"code": -32040, "message": error.to_string()}))?;
+                let authorization = ExecAuthorization {
+                    argv,
+                    cwd: Some(".".into()),
+                    background: false,
+                };
+                if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
+                    permissions
+                        .consume_exec(approval_id, &authorization)
+                        .map_err(|error| json!({"code": -32041, "message": error.to_string()}))?;
+                } else {
+                    let (summary, reason) = if action == "push" {
+                        (
+                            "Push Git commits to a remote".to_string(),
+                            "Git push changes a remote repository and requires explicit one-time approval".to_string(),
+                        )
+                    } else {
+                        (
+                            format!("Run structured git {action}"),
+                            "Git mutation changes the local repository and requires explicit one-time approval".to_string(),
+                        )
+                    };
+                    let approval = permissions.request_action(&authorization, summary, reason);
+                    let value = serde_json::to_value(approval)
+                        .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
+                    return Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": json!({"status": "approval_required", "approval": value}).to_string()
+                        }]
+                    }));
+                }
+            }
+
             let result = match action {
                 "status" => git::status(workspace),
-                "diff" => {
-                    let staged = arguments
-                        .get("staged")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    let pathspec = arguments
-                        .get("pathspec")
-                        .and_then(Value::as_array)
-                        .map(|values| {
-                            values
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    git::diff(workspace, staged, &pathspec)
-                }
+                "diff" => git::diff(workspace, staged, &pathspec),
                 "log" => git::log(
                     workspace,
                     arguments.get("limit").and_then(Value::as_u64).unwrap_or(20),
@@ -437,6 +482,11 @@ fn call_tool(
                         .unwrap_or("HEAD");
                     git::show(workspace, revision)
                 }
+                "add" => git::add(workspace, &pathspec),
+                "commit" => git::commit(workspace, message.unwrap_or_default()),
+                "switch" => git::switch(workspace, branch.unwrap_or_default()),
+                "restore" => git::restore(workspace, staged, &pathspec),
+                "push" => git::push(workspace, remote, refspec),
                 _ => return Err(json!({"code": -32602, "message": "unknown git action"})),
             }
             .map_err(|error| json!({"code": -32040, "message": error.to_string()}))?;
