@@ -64,7 +64,7 @@ enum Command {
             long,
             value_name = "PATH",
             conflicts_with = "tunnel_command_json",
-            help = "Advanced: use an existing tunnel wrapper instead of the generated wrapper"
+            help = "Advanced: use an existing tunnel wrapper instead of direct tunnel-client launch"
         )]
         tunnel_wrapper: Option<PathBuf>,
         #[arg(

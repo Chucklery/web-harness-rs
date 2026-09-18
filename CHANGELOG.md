@@ -4,6 +4,26 @@ All notable changes will be documented here.
 
 ## Unreleased
 
+## 0.3.0 - 2026-09-18
+
+### Added
+
+- Windows 10/11 x64 and ARM64 build/release targets with native ZIP packaging.
+- Cross-platform hidden API-key input and Windows user credential storage.
+- Explicit Apple Silicon release coverage for M1/M2/M3/M4 Macs.
+- setup --show now reports the resolved tunnel-client path for installation diagnostics.
+
+### Changed
+
+- Default setup/connect no longer creates or depends on a generated zsh tunnel wrapper; web-harness launches the official tunnel-client directly.
+- tunnel-client resolution now covers PATH, release bundles, Homebrew Cellar/opt layouts, Intel /usr/local, and Apple Silicon /opt/homebrew.
+- OpenAI tunnel-client downloads now use persistent.oaistatic.com as the primary source with GitHub Releases as a fallback, with the same pinned SHA256 verification.
+- Homebrew packaging preserves the complete libexec/web-harness directory layout.
+
+### Fixed
+
+- Fixed bundled OpenAI tunnel-client was not found on Intel macOS/Homebrew installations.
+
 ## 0.2.0 - 2026-09-18
 
 ### Added
