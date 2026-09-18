@@ -20,6 +20,14 @@ The execution layer additionally uses argv-based spawning, workspace-bounded cwd
 
 On macOS, when /usr/bin/sandbox-exec is available, process execution is wrapped in a deny-by-default Seatbelt profile. The profile allows process creation, read access required by normal tooling, and writes only inside the configured workspace and temporary directories; network access is not allowed by the profile. When no native sandbox backend is available, execution falls back to one-time cryptographically bound approval tickets.
 
+## Secret handling
+
+Child processes do not inherit the full web-harness environment. The host clears the environment before exec and rebuilds a small operational allowlist such as PATH, HOME, TMPDIR, locale variables, terminal metadata, and SSH_AUTH_SOCK. Variables whose names look like tokens, passwords, cookies, secrets, credentials, or API keys are not forwarded.
+
+Process stdout/stderr and externally injected tunnel acceptance output are passed through a bounded redaction layer before being returned to the model or CLI. The redactor covers common assignment forms and bearer authorization values.
+
+Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
+
 ## Not implemented yet
 
 The current bootstrap does not yet provide:

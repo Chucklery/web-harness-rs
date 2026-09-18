@@ -22,10 +22,11 @@ The current pre-1.0 implementation includes:
 - one-time SHA-256-bound execution approval tickets
 - structured read-only Git operations
 - macOS Seatbelt execution when /usr/bin/sandbox-exec is available, with deny-by-default policy and workspace-scoped writes
+- secret redaction on process and tunnel output for common token/password/key/cookie/authorization patterns
+- minimized child-process environment via env_clear plus a small operational allowlist
 
 The following architecture components are not yet implemented:
 
-- secret redaction
 - adversarial sandbox coverage and a hardened command policy
 
 Do not treat the current pre-1.0 implementation as a fully hardened remote-execution boundary until native OS sandbox enforcement is complete.

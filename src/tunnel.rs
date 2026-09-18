@@ -1,3 +1,4 @@
+use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -124,10 +125,10 @@ pub fn accept(
                 external_command_configured: true,
                 external_command_passed: Some(false),
                 external_exit_code: None,
-                stdout_tail: Some(bounded_tail(&stdout, OUTPUT_LIMIT)),
+                stdout_tail: Some(redact::text(&bounded_tail(&stdout, OUTPUT_LIMIT))),
                 stderr_tail: Some(format!(
                     "{}\nexternal tunnel acceptance command timed out after 120 seconds",
-                    bounded_tail(&stderr, OUTPUT_LIMIT)
+                    redact::text(&bounded_tail(&stderr, OUTPUT_LIMIT))
                 )),
                 note: "The injected command is responsible for exercising the current official Secure MCP Tunnel flow.".into(),
             });
@@ -144,8 +145,8 @@ pub fn accept(
         external_command_configured: true,
         external_command_passed: Some(passed),
         external_exit_code: status.code(),
-        stdout_tail: Some(bounded_tail(&stdout, OUTPUT_LIMIT)),
-        stderr_tail: Some(bounded_tail(&stderr, OUTPUT_LIMIT)),
+        stdout_tail: Some(redact::text(&bounded_tail(&stdout, OUTPUT_LIMIT))),
+        stderr_tail: Some(redact::text(&bounded_tail(&stderr, OUTPUT_LIMIT))),
         note: "The external command is user/CI supplied so this project never invents tunnel-client flags. It should implement the current official Secure MCP Tunnel acceptance steps.".into(),
     })
 }

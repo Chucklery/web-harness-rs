@@ -8,6 +8,7 @@ mod jobs;
 mod mcp;
 mod patch;
 mod permission;
+mod redact;
 mod sandbox;
 mod search;
 mod tunnel;

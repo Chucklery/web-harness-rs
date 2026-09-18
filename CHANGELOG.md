@@ -19,6 +19,7 @@ All notable changes will be documented here.
 - Secure MCP Tunnel acceptance harness with externally injected official command.
 - Machine-readable 8 GB benchmark reports and physical Intel Mac evidence.
 - Release packaging, checksums, multi-target GitHub Release workflow, and Homebrew formula template.
+- Secret redaction and minimized child-process environment inheritance.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 

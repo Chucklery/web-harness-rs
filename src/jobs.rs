@@ -1,3 +1,4 @@
+use crate::redact;
 use crate::sandbox;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
@@ -103,8 +104,8 @@ impl JobManager {
         let _ = fs::remove_file(stderr_path);
         Ok(ExecResult {
             exit_code,
-            stdout_tail,
-            stderr_tail,
+            stdout_tail: redact::text(&stdout_tail),
+            stderr_tail: redact::text(&stderr_tail),
             stdout_truncated,
             stderr_truncated,
             timed_out,
@@ -207,7 +208,8 @@ impl JobManager {
             "stderr" => &job.stderr_path,
             _ => return Err(JobError::Invalid("stream must be stdout or stderr".into())),
         };
-        Ok(read_tail(path, OUTPUT_TAIL_BYTES)?)
+        let (text, truncated) = read_tail(path, OUTPUT_TAIL_BYTES)?;
+        Ok((redact::text(&text), truncated))
     }
 
     fn refresh(&mut self) {
@@ -273,9 +275,11 @@ fn spawn(
     command
         .args(&argv[1..])
         .current_dir(cwd)
+        .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    inherit_safe_environment(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -289,6 +293,33 @@ fn spawn(
         }
     }
     command.spawn()
+}
+
+fn inherit_safe_environment(command: &mut Command) {
+    const SAFE: &[&str] = &[
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "TERM",
+        "SHELL",
+        "USER",
+        "LOGNAME",
+        "SSH_AUTH_SOCK",
+    ];
+    for key in SAFE {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    for (key, value) in std::env::vars_os() {
+        let key_text = key.to_string_lossy();
+        if key_text.starts_with("LC_") && !redact::sensitive_env_key(&key_text) {
+            command.env(key, value);
+        }
+    }
 }
 
 fn terminate(child: &mut Child) -> Result<(), std::io::Error> {
@@ -367,6 +398,47 @@ mod tests {
         }
         let (output, _) = manager.output(&started.id, "stdout").unwrap();
         assert_eq!(output, "done");
+    }
+
+    #[test]
+    fn child_does_not_inherit_sensitive_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let manager = JobManager::new();
+        std::env::set_var("WEB_HARNESS_TEST_SECRET_TOKEN", "super-secret-value");
+        let result = manager
+            .run_foreground(
+                &ws,
+                &[
+                    "sh".into(),
+                    "-c".into(),
+                    "printf '%s' \"$WEB_HARNESS_TEST_SECRET_TOKEN\"".into(),
+                ],
+                None,
+                Some(2_000),
+                false,
+            )
+            .unwrap();
+        std::env::remove_var("WEB_HARNESS_TEST_SECRET_TOKEN");
+        assert_eq!(result.stdout_tail, "");
+    }
+
+    #[test]
+    fn returned_output_is_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground(
+                &ws,
+                &["sh".into(), "-c".into(), "printf 'API_KEY=abc123'".into()],
+                None,
+                Some(2_000),
+                false,
+            )
+            .unwrap();
+        assert!(!result.stdout_tail.contains("abc123"));
+        assert!(result.stdout_tail.contains("[REDACTED]"));
     }
 
     #[cfg(target_os = "macos")]

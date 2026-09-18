@@ -61,7 +61,7 @@ Status: approval-bound execution is implemented and structured workspace patches
 - sandbox hardening
 - performance hardening
 
-Status: the tunnel acceptance harness and benchmark harness exist. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
+Status: the tunnel acceptance harness and benchmark harness exist. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
 
 UI and LSP remain optional and should only be added if real usage metrics justify them.
 
