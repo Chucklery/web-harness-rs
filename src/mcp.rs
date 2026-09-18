@@ -285,6 +285,9 @@ fn call_tool(
             )
         }
         "patch" => {
+            permissions
+                .authorize_workspace_patch()
+                .map_err(|error| json!({"code": -32022, "message": error.to_string()}))?;
             let patch_text = params
                 .get("arguments")
                 .and_then(|value| value.get("patch"))

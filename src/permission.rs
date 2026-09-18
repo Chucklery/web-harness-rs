@@ -84,6 +84,10 @@ impl PermissionEngine {
         }
     }
 
+    pub fn authorize_workspace_patch(&self) -> Result<(), PermissionError> {
+        Ok(())
+    }
+
     pub fn approve(&mut self, id: &str) -> Result<(), PermissionError> {
         self.cleanup();
         let ticket = self.tickets.get_mut(id).ok_or(PermissionError::NotFound)?;
