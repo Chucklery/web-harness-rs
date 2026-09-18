@@ -3,7 +3,7 @@ use crate::sandbox;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +15,6 @@ struct RuntimeState {
     tunnel_pid: u32,
     workspace: String,
     started_unix_s: u64,
-    log_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -26,7 +25,6 @@ pub struct UserStatus {
     pub workspace: Option<String>,
     pub tunnel_pid: Option<u32>,
     pub sandbox: String,
-    pub log_path: Option<String>,
     pub message: String,
 }
 
@@ -81,9 +79,6 @@ pub fn connect(
 
     let state_dir = config::state_dir()?;
     fs::create_dir_all(&state_dir)?;
-    let log_path = state_dir.join("connect.log");
-    let stdout = File::create(&log_path)?;
-    let stderr = stdout.try_clone()?;
     let current_exe = std::env::current_exe()?;
     let server_args = json!([
         "serve",
@@ -99,8 +94,8 @@ pub fn connect(
         .env("WEB_HARNESS_SERVER_ARGS_JSON", server_args.to_string())
         .env("WEB_HARNESS_WORKSPACE", workspace.root())
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -118,10 +113,7 @@ pub fn connect(
     if !process_alive(child.id()) {
         return Err(RuntimeError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!(
-                "tunnel process exited during startup; inspect {}",
-                log_path.display()
-            ),
+            "tunnel process exited during startup; use tunnel doctor/accept for diagnostics",
         )));
     }
 
@@ -133,7 +125,6 @@ pub fn connect(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
-        log_path: log_path.display().to_string(),
     };
     write_state(&state)?;
     Ok(status_from_state(
@@ -154,7 +145,6 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
             workspace: user_config.as_ref().map(|value| value.workspace.clone()),
             tunnel_pid: None,
             sandbox: sandbox::status().into(),
-            log_path: None,
             message: if user_config.is_some() {
                 "configured but disconnected".into()
             } else {
@@ -171,7 +161,6 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
             workspace: Some(state.workspace),
             tunnel_pid: None,
             sandbox: sandbox::status().into(),
-            log_path: Some(state.log_path),
             message: "stale connection state was cleaned up".into(),
         });
     }
@@ -192,7 +181,6 @@ pub fn disconnect() -> Result<UserStatus, RuntimeError> {
             workspace: Some(state.workspace),
             tunnel_pid: None,
             sandbox: sandbox::status().into(),
-            log_path: Some(state.log_path),
             message: "disconnected".into(),
         });
     }
@@ -203,14 +191,13 @@ pub fn disconnect() -> Result<UserStatus, RuntimeError> {
         workspace: user_config.as_ref().map(|value| value.workspace.clone()),
         tunnel_pid: None,
         sandbox: sandbox::status().into(),
-        log_path: None,
         message: "already disconnected".into(),
     })
 }
 
 pub fn format_status(status: &UserStatus) -> String {
     format!(
-        "web-harness\n  status: {}\n  workspace: {}\n  tunnel: {}\n  sandbox: {}\n  log: {}\n  {}",
+        "web-harness\n  status: {}\n  workspace: {}\n  tunnel: {}\n  sandbox: {}\n  {}",
         if status.connected {
             "connected"
         } else {
@@ -222,7 +209,6 @@ pub fn format_status(status: &UserStatus) -> String {
             .map(|pid| format!("running (pid {pid})"))
             .unwrap_or_else(|| "stopped".into()),
         status.sandbox,
-        status.log_path.as_deref().unwrap_or("-"),
         status.message
     )
 }
@@ -240,7 +226,6 @@ fn status_from_state(
         workspace: Some(state.workspace),
         tunnel_pid: Some(state.tunnel_pid),
         sandbox: sandbox::status().into(),
-        log_path: Some(state.log_path),
         message: message.into(),
     }
 }
@@ -323,7 +308,6 @@ mod tests {
             workspace: Some("/tmp/project".into()),
             tunnel_pid: None,
             sandbox: "test".into(),
-            log_path: None,
             message: "disconnected".into(),
         };
         let output = format_status(&value);
