@@ -40,17 +40,39 @@ enum Command {
         workspace: PathBuf,
     },
     Setup {
-        #[arg(long, value_name = "PATH", default_value = ".")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = ".",
+            help = "Default workspace recorded during setup"
+        )]
         workspace: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "OpenAI tunnel ID; omit for interactive prompt")]
         tunnel_id: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "OpenAI runtime API key; prefer interactive entry to avoid shell history"
+        )]
         api_key: Option<String>,
-        #[arg(long, conflicts_with = "tunnel_wrapper")]
+        #[arg(
+            long,
+            conflicts_with = "tunnel_wrapper",
+            help = "Advanced: custom tunnel command as a JSON argv array"
+        )]
         tunnel_command_json: Option<String>,
-        #[arg(long, value_name = "PATH", conflicts_with = "tunnel_command_json")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with = "tunnel_command_json",
+            help = "Advanced: use an existing tunnel wrapper instead of the generated wrapper"
+        )]
         tunnel_wrapper: Option<PathBuf>,
-        #[arg(long, default_value_t = false)]
+        #[arg(
+            long,
+            default_value_t = false,
+            conflicts_with_all = ["tunnel_id", "api_key", "tunnel_command_json", "tunnel_wrapper"],
+            help = "Show non-secret setup status without modifying configuration"
+        )]
         show: bool,
     },
     Connect {
