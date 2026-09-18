@@ -92,6 +92,7 @@ pub fn connect(
     let mut command = Command::new(&argv[0]);
     let shell_env = onboarding::managed_shell_env()
         .map_err(|error| RuntimeError::Io(std::io::Error::other(error.to_string())))?;
+    let tunnel_client = onboarding::resolve_tunnel_client();
     command
         .args(&argv[1..])
         .env("WEB_HARNESS_SERVER_BIN", &current_exe)
@@ -100,6 +101,18 @@ pub fn connect(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(tunnel_client) = tunnel_client {
+        command.env("WEB_HARNESS_TUNNEL_CLIENT_BIN", &tunnel_client);
+        if let Some(parent) = tunnel_client.parent() {
+            let mut paths = vec![parent.to_path_buf()];
+            if let Some(existing) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&existing));
+            }
+            if let Ok(path) = std::env::join_paths(paths) {
+                command.env("PATH", path);
+            }
+        }
+    }
     if let Some(tunnel_id) = shell_env.tunnel_id {
         command.env("CONTROL_PLANE_TUNNEL_ID", tunnel_id);
     }

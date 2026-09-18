@@ -21,9 +21,11 @@ class WebHarness < Formula
 
   def install
     bin.install "web-harness"
+    (libexec/"web-harness").install Dir["libexec/web-harness/*"]
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/web-harness version")
+    assert_predicate libexec/"web-harness/tunnel-client", :executable?
   end
 end

@@ -1,5 +1,6 @@
 use crate::config::{self, UserConfig};
 use serde::Serialize;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -59,6 +60,10 @@ pub enum OnboardingError {
     IncompleteCredentials,
     #[error("--tunnel-command-json and --tunnel-wrapper cannot both be set")]
     ConflictingTunnelOverrides,
+    #[error(
+        "bundled OpenAI tunnel-client was not found; reinstall web-harness from the official GitHub Release or Homebrew package"
+    )]
+    TunnelClientUnavailable,
 }
 
 pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, OnboardingError> {
@@ -69,10 +74,20 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
     let custom_tunnel = options.tunnel_command_json.is_some() || options.tunnel_wrapper.is_some();
     let credentials_requested =
         options.tunnel_id.is_some() || options.api_key.is_some() || !custom_tunnel;
+    let tunnel_client = if custom_tunnel {
+        resolve_tunnel_client()
+    } else {
+        Some(resolve_tunnel_client().ok_or(OnboardingError::TunnelClientUnavailable)?)
+    };
 
     let (tunnel_id, api_key, shell_backup_path) = if credentials_requested {
         let interactive = io::stdin().is_terminal();
         if interactive && (options.tunnel_id.is_none() || options.api_key.is_none()) {
+            eprintln!("OpenAI Platform: https://platform.openai.com/");
+            eprintln!("Get tunnel_id: https://platform.openai.com/settings/organization/tunnels");
+            eprintln!(
+                "Create runtime API key: https://platform.openai.com/settings/organization/api-keys"
+            );
             eprintln!(
                 "warning: web-harness will store CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY as plaintext in {}",
                 zshrc_path()?.display()
@@ -122,7 +137,7 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
         tunnel_wrapper: wrapper_path,
         tunnel_id,
         api_key_configured: !api_key.is_empty() || managed_shell_env()?.api_key.is_some(),
-        tunnel_client_available: find_in_path("tunnel-client").is_some(),
+        tunnel_client_available: tunnel_client.is_some(),
     })
 }
 
@@ -135,7 +150,7 @@ pub fn status() -> Result<SetupStatus, OnboardingError> {
         tunnel_id: shell.tunnel_id,
         api_key_configured: shell.api_key.is_some(),
         shell_config_path: zshrc_path()?.display().to_string(),
-        tunnel_client_available: find_in_path("tunnel-client").is_some(),
+        tunnel_client_available: resolve_tunnel_client().is_some(),
     })
 }
 
@@ -161,12 +176,10 @@ pub fn format_setup_result(result: &SetupResult) -> String {
         lines.push(format!("shell backup: {backup}"));
     }
     if result.tunnel_client_available {
-        lines.push("tunnel-client: found".into());
+        lines.push("tunnel-client: bundled/available".into());
         lines.push("next: web-harness connect".into());
     } else {
-        lines.push("tunnel-client: NOT FOUND on PATH".into());
-        lines
-            .push("install the official OpenAI tunnel-client, then run web-harness connect".into());
+        lines.push("tunnel-client: unavailable; reinstall web-harness".into());
     }
     lines.join("\n")
 }
@@ -191,7 +204,7 @@ pub fn format_setup_status(status: &SetupStatus) -> String {
         format!(
             "tunnel-client: {}",
             if status.tunnel_client_available {
-                "found"
+                "bundled/available"
             } else {
                 "not found"
             }
@@ -294,15 +307,11 @@ set -eu
 : "${CONTROL_PLANE_API_KEY:?CONTROL_PLANE_API_KEY is required}"
 : "${WEB_HARNESS_SERVER_BIN:?WEB_HARNESS_SERVER_BIN is required}"
 : "${WEB_HARNESS_WORKSPACE:?WEB_HARNESS_WORKSPACE is required}"
-
-if ! command -v tunnel-client >/dev/null 2>&1; then
-  print -u2 "web-harness: tunnel-client is not installed or not on PATH"
-  exit 127
-fi
+: "${WEB_HARNESS_TUNNEL_CLIENT_BIN:?bundled tunnel-client path is required}"
 
 mcp_command="$(printf '%q' "$WEB_HARNESS_SERVER_BIN") serve --stdio --workspace $(printf '%q' "$WEB_HARNESS_WORKSPACE")"
 
-exec tunnel-client run --mcp.command="$mcp_command"
+exec "$WEB_HARNESS_TUNNEL_CLIENT_BIN" run --mcp.command="$mcp_command"
 "#
 }
 
@@ -450,17 +459,37 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn find_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| {
-            candidate.is_file()
-                && candidate
-                    .metadata()
-                    .map(|meta| meta.permissions().mode() & 0o111 != 0)
-                    .unwrap_or(false)
-        })
+pub fn resolve_tunnel_client() -> Option<PathBuf> {
+    if let Some(override_path) = std::env::var_os("WEB_HARNESS_TUNNEL_CLIENT_BIN") {
+        let path = PathBuf::from(override_path);
+        if is_executable(&path) {
+            return Some(path);
+        }
+    }
+    let executable = std::env::current_exe().ok()?;
+    resolve_tunnel_client_from(&executable, std::env::var_os("PATH"))
+}
+
+fn resolve_tunnel_client_from(executable: &Path, path_env: Option<OsString>) -> Option<PathBuf> {
+    let executable_dir = executable.parent()?;
+    let mut candidates = vec![
+        executable_dir.join("libexec/web-harness/tunnel-client"),
+        executable_dir.join("../libexec/web-harness/tunnel-client"),
+    ];
+    if let Some(path) = path_env {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join("tunnel-client")));
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| is_executable(candidate))
+}
+
+fn is_executable(candidate: &Path) -> bool {
+    candidate.is_file()
+        && candidate
+            .metadata()
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -571,8 +600,44 @@ mod tests {
         let script = tunnel_wrapper_script();
         assert!(script.contains("CONTROL_PLANE_API_KEY"));
         assert!(script.contains("CONTROL_PLANE_TUNNEL_ID"));
-        assert!(script.contains("tunnel-client run"));
+        assert!(script.contains("WEB_HARNESS_TUNNEL_CLIENT_BIN"));
         assert!(script.contains("--mcp.command"));
         assert!(!script.contains("sk-"));
+    }
+
+    #[test]
+    fn resolves_release_archive_bundled_tunnel_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("web-harness");
+        fs::write(&executable, "").unwrap();
+        let bundled = dir.path().join("libexec/web-harness/tunnel-client");
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, "").unwrap();
+        fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            resolve_tunnel_client_from(&executable, None).unwrap(),
+            bundled
+        );
+    }
+
+    #[test]
+    fn resolves_homebrew_bundled_tunnel_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("bin/web-harness");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, "").unwrap();
+        let bundled = dir.path().join("libexec/web-harness/tunnel-client");
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, "").unwrap();
+        fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            resolve_tunnel_client_from(&executable, None)
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            bundled.canonicalize().unwrap()
+        );
     }
 }

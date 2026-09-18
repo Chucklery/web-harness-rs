@@ -11,7 +11,9 @@ trap 'rm -rf "$stage"' EXIT
 test -x "$binary"
 mkdir -p dist
 cp "$binary" "$stage/web-harness"
-cp LICENSE NOTICE README.md "$stage/"
+mkdir -p "$stage/libexec/web-harness"
+./scripts/fetch-tunnel-client.sh "$target" "$stage/libexec/web-harness"
+cp LICENSE NOTICE README.md THIRD_PARTY_NOTICES.md "$stage/"
 tar -C "$stage" -czf "dist/$archive" .
 shasum -a 256 "dist/$archive" | sed 's#  dist/#  #' > "dist/$archive.sha256"
 printf '%s\n' "dist/$archive"
