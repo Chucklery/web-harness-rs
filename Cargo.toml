@@ -23,3 +23,10 @@ tempfile = "3"
 name = "web-harness"
 path = "src/main.rs"
 
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+

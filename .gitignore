@@ -1,6 +1,8 @@
 .DS_Store
 /target/
+/dist/
 /docs/book/
+/benchmarks/latest.json
 .idea/
 .vscode/
 *.swp

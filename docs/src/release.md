@@ -18,3 +18,38 @@ Before a stable release, also require:
 
 Publishing and GitHub release creation are intentionally separate from CI validation.
 
+## Release artifacts
+
+The tag-triggered `.github/workflows/release.yml` builds locked release binaries for Linux x86_64, macOS Intel, and macOS Apple Silicon.
+
+Each target is packaged with:
+
+- web-harness
+- LICENSE
+- NOTICE
+- README.md
+
+The workflow produces per-archive SHA256 files and an aggregate `SHA256SUMS`, then renders a Homebrew formula from `packaging/homebrew/web-harness.rb.template`.
+
+## Local packaging check
+
+Use the same packaging script as CI:
+
+~~~bash
+host_target="$(rustc -vV | sed -n 's/^host: //p')"
+cargo build --release --locked --target "$host_target"
+./scripts/package-release.sh "$host_target" 0.1.0
+~~~
+
+The Homebrew renderer expects checksums for all release targets:
+
+~~~bash
+./scripts/render-homebrew-formula.sh 0.1.0 owner/repository dist dist/web-harness.rb
+~~~
+
+## Publishing
+
+The workflow only runs for a pushed `v*` tag. Normal CI, local builds, and merges do not publish releases.
+
+Creating or pushing a tag is a maintainer action and should happen only after the release gates above are satisfied.
+
