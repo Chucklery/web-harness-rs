@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "timestamp_unix_s": 1789704876,
+  "machine": {
+    "os": "macos",
+    "arch": "x86_64",
+    "physical_memory_bytes": 8589934592,
+    "approximately_8gb": true
+  },
+  "gates": {
+    "host_idle_rss_max_mib": 80,
+    "tunnel_plus_host_idle_rss_max_mib": 150,
+    "cold_start_max_ms": 500,
+    "local_dispatch_p95_max_ms": 20,
+    "job_memory_log_buffer_max_kib": 512
+  },
+  "measurements": {
+    "workspace_info": {
+      "iterations": 1000,
+      "p50_us": 0,
+      "p95_us": 0,
+      "p99_us": 0
+    },
+    "read_file": {
+      "iterations": 1000,
+      "p50_us": 53,
+      "p95_us": 101,
+      "p99_us": 117
+    },
+    "search": {
+      "status": "unavailable",
+      "latency": null,
+      "detail": "ripgrep is not available"
+    },
+    "patch": {
+      "status": "measured",
+      "latency": {
+        "iterations": 500,
+        "p50_us": 368,
+        "p95_us": 506,
+        "p99_us": 608
+      },
+      "detail": null
+    },
+    "exec": {
+      "status": "measured",
+      "latency": {
+        "iterations": 100,
+        "p50_us": 25900,
+        "p95_us": 28280,
+        "p99_us": 28346
+      },
+      "detail": null
+    },
+    "process": {
+      "mcp_ready_ms": 3,
+      "idle_rss_kib": 1064,
+      "idle_cpu_percent": 0.4
+    }
+  },
+  "evaluation": {
+    "host_idle_rss_under_80_mib": true,
+    "cold_start_under_500_ms": true,
+    "tunnel_plus_host_idle_rss_under_150_mib": null,
+    "tested_on_approximately_8gb_machine": true
+  },
+  "notes": [
+    "workspace_info/read_file timings are in-process kernel measurements, not remote MCP tunnel latency",
+    "tunnel+host RSS is intentionally not evaluated by this local benchmark",
+    "8 GB acceptance requires evidence from physical 8 GB Intel and Apple Silicon Macs"
+  ]
+}

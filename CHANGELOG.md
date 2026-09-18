@@ -15,6 +15,9 @@ All notable changes will be documented here.
 - Structured read-only Git gateway.
 - One-time cryptographically bound execution approvals.
 - Local self-test, kernel microbenchmark, and MCP stdio end-to-end test.
+- macOS Seatbelt execution with workspace-scoped writes and approval fallback.
+- Secure MCP Tunnel acceptance harness with externally injected official command.
+- Machine-readable 8 GB benchmark reports and physical Intel Mac evidence.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 

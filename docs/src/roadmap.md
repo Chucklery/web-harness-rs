@@ -52,7 +52,7 @@ Status: implemented as read-only status/diff/log/show.
 - approval tickets
 - macOS sandbox
 
-Status: approval-bound execution is implemented and structured workspace patches pass through the permission kernel. Native macOS Seatbelt enforcement remains incomplete and therefore process execution defaults to explicit approval.
+Status: approval-bound execution is implemented and structured workspace patches pass through the permission kernel. On macOS, /usr/bin/sandbox-exec is used for deny-by-default Seatbelt enforcement with workspace-scoped writes; systems without a native backend fall back to explicit approval.
 
 ## Stage 8 and later
 
@@ -60,6 +60,8 @@ Status: approval-bound execution is implemented and structured workspace patches
 - physical-machine 8 GB resource benchmarks
 - sandbox hardening
 - performance hardening
+
+Status: the tunnel acceptance harness and benchmark harness exist. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
 
 UI and LSP remain optional and should only be added if real usage metrics justify them.
 

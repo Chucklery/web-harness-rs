@@ -125,7 +125,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             iterations,
         } => {
             let workspace = workspace::Workspace::new(workspace)?;
-            benchmark::run(&workspace, iterations);
+            let report = benchmark::run(&workspace, iterations)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Tunnel { command } => match command {
             TunnelCommand::Doctor { workspace } => {

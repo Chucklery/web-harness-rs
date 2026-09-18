@@ -23,5 +23,5 @@ The project should grow toward five layers:
 
 Resource claims for 8 GB Macs require physical-machine evidence rather than CI assumptions.
 
-The built-in benchmark command is only a local kernel microbenchmark. It is not evidence for tunnel latency or the 8 GB memory gates.
+The built-in benchmark command emits machine-readable JSON and measures local operation latency plus MCP-ready startup/RSS/CPU. It still cannot evaluate Tunnel + Host RSS by itself, and a complete 8 GB gate requires physical Intel and Apple Silicon evidence. See [Performance and 8 GB Gates](benchmarks.md).
 

@@ -10,6 +10,7 @@
 - [Security Model](security.md)
 - [Development](development.md)
 - [Testing](testing.md)
+- [Performance and 8 GB Gates](benchmarks.md)
 - [Troubleshooting](troubleshooting.md)
 - [Release Process](release.md)
 - [Roadmap](roadmap.md)
