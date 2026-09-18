@@ -34,16 +34,13 @@ The exec path applies a lightweight policy before process creation. It rejects e
 
 The macOS test suite exercises four concrete Seatbelt properties: workspace-outside writes are denied, local network connections are denied, workspace and temporary writes are allowed, and system files/tools remain readable.
 
-## Not implemented yet
+## Current limitations
 
-The current bootstrap does not yet provide:
+The current pre-1.0 boundary still has known limits:
 
-- macOS Seatbelt sandboxing
-- network policy
-- command policy
-- patch authorization
-- secret redaction
-- hardened sandbox policy coverage for more toolchains and adversarial cases
+- non-macOS platforms do not yet have a native sandbox backend and therefore rely on explicit approvals
+- secret redaction is heuristic and cannot recognize every possible secret format
+- broader sandbox compatibility testing is still needed across more developer toolchains and shell compositions
+- real production Secure MCP Tunnel acceptance evidence remains outstanding
 
-Until those exist, do not describe web-harness as a hardened remote command execution boundary.
-
+Do not treat pre-1.0 as a universally hardened remote-execution boundary across every platform and toolchain.

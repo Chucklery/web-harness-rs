@@ -22,6 +22,8 @@ All notable changes will be documented here.
 - Secret redaction and minimized child-process environment inheritance.
 - Hardened command policy and macOS Seatbelt adversarial tests.
 - Optional Tunnel PID RSS sampling and explicit multi-machine release-gate aggregation.
+- User-facing setup/connect/status/disconnect lifecycle with stale PID recovery.
+- Approval-gated structured Git add/commit/switch/restore/push workflow.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 

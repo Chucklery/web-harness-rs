@@ -1,6 +1,61 @@
 # Troubleshooting
 
-## Workspace check fails
+## web-harness says it is not configured
+
+Run setup first:
+
+~~~bash
+web-harness setup \
+  --workspace . \
+  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+~~~
+
+## connect says the tunnel command is not configured
+
+Run setup again with the wrapper command, or provide a one-off override:
+
+~~~bash
+web-harness connect \
+  --tunnel-command-json '["/absolute/path/to/tunnel-wrapper"]'
+~~~
+
+The override is not written back to configuration.
+
+## connect starts the wrong repository
+
+connect uses the current directory by default.
+
+~~~bash
+cd /path/to/correct/project
+web-harness connect
+~~~
+
+Or use:
+
+~~~bash
+web-harness connect --workspace /path/to/project
+~~~
+
+## status reports stale state recovered
+
+The previously recorded tunnel PID no longer exists. web-harness removes stale state automatically and reports the recovery.
+
+Run connect again.
+
+## the tunnel wrapper exits immediately
+
+Normal connect intentionally discards wrapper stdout/stderr so credentials or authentication output are not persisted.
+
+Use the bounded diagnostic commands instead:
+
+~~~bash
+web-harness tunnel doctor --workspace .
+web-harness tunnel accept --workspace . --command-json '["/path/to/acceptance-wrapper"]'
+~~~
+
+Their returned output is bounded and passed through secret redaction.
+
+## workspace check fails
 
 Confirm the path exists and is a directory:
 
@@ -8,21 +63,25 @@ Confirm the path exists and is a directory:
 web-harness workspace check /absolute/path/to/project
 ~~~
 
-## File read is rejected
+## a file read or Git pathspec is rejected
 
 Typical causes:
 
-- the path does not exist
-- the canonical path escapes the workspace through a symlink
-- the file exceeds the per-file limit
-- the file is not valid UTF-8
-- the batch exceeds the total read limit
+- the canonical path escapes the workspace
+- a symlink resolves outside the workspace
+- a file exceeds a read limit
+- the path is not valid for the requested structured Git operation
+
+## a Git mutation did not run
+
+add, commit, switch, restore, and push require an approval ticket. The first call returns approval_required. Approve that ticket, then retry the exact same Git operation with its approval_id.
+
+A ticket cannot authorize a different mutation.
 
 ## MCP output is corrupted
 
-The MCP protocol uses stdout. Diagnostic logging must go to stderr. Avoid printing unrelated data to stdout while serving.
+The MCP protocol uses stdout. Diagnostic logging must go to stderr. Avoid printing unrelated data to stdout while running serve --stdio.
 
-## Tunnel does not connect
+## Secure MCP Tunnel does not connect
 
-First confirm web-harness works locally over stdio, then use the current OpenAI tunnel-client diagnostics and official Secure MCP Tunnel documentation.
-
+First run tunnel doctor to verify the local stdio MCP contract. Then validate the external wrapper against the current OpenAI Secure MCP Tunnel documentation. web-harness intentionally does not hard-code tunnel-client flags that can change.

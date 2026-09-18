@@ -20,7 +20,7 @@ The current pre-1.0 implementation includes:
 - argv-based process execution with bounded returned output
 - owned Unix process groups and bounded background jobs
 - one-time SHA-256-bound execution approval tickets
-- structured read-only Git operations
+- structured Git read operations plus approval-gated add/commit/switch/restore/push mutations
 - macOS Seatbelt execution when /usr/bin/sandbox-exec is available, with deny-by-default policy and workspace-scoped writes
 - secret redaction on process and tunnel output for common token/password/key/cookie/authorization patterns
 - minimized child-process environment via env_clear plus a small operational allowlist
@@ -31,5 +31,5 @@ The following architecture components are not yet implemented:
 
 - broader adversarial coverage across more developer toolchains and shell compositions
 
-Do not treat the current pre-1.0 implementation as a fully hardened remote-execution boundary until native OS sandbox enforcement is complete.
+Do not treat the current pre-1.0 implementation as a universally hardened remote-execution boundary across every platform and developer toolchain.
 

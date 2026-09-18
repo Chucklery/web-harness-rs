@@ -24,10 +24,10 @@ The current pre-1.0 implementation includes:
 - structured patching
 - bounded foreground/background execution
 - background job lifecycle and output tails
-- structured read-only Git operations
-- one-time approval-bound execution
+- structured read-only and approval-gated Git mutation operations
+- one-time approval-bound execution and Git mutations
 
-Native OS sandbox enforcement and real Secure MCP Tunnel end-to-end acceptance remain roadmap work.
+macOS Seatbelt enforcement is implemented. Real Secure MCP Tunnel production acceptance and complete 8 GiB Intel/Apple Silicon release evidence remain release gates.
 
 ## Design target
 

@@ -1,22 +1,8 @@
 # Installation
 
-## From source
+web-harness is designed to be distributed as one native binary. Rust, Node, Electron, and a browser runtime are not required on the end-user machine.
 
-Requirements:
-
-- Rust 1.80 or newer
-- Git
-- macOS or Linux for the initial development target
-
-~~~bash
-git clone YOUR_REPOSITORY_URL
-cd web-harness-rs
-cargo build --release
-~~~
-
-The resulting binary is under target/release/web-harness.
-
-## From a GitHub Release
+## GitHub Release
 
 Tagged releases are configured to publish archives for:
 
@@ -24,32 +10,64 @@ Tagged releases are configured to publish archives for:
 - x86_64-apple-darwin
 - aarch64-apple-darwin
 
-Each release includes per-archive SHA256 files plus an aggregate `SHA256SUMS`.
+Each release includes per-archive SHA256 files plus an aggregate SHA256SUMS.
 
-After downloading the archive that matches your machine:
+After downloading the archive for your platform:
 
 ~~~bash
 tar -xzf web-harness-VERSION-TARGET.tar.gz
 ./web-harness version
 ~~~
 
-Move the binary somewhere on PATH, for example:
+Install it somewhere on PATH, for example:
 
 ~~~bash
+mkdir -p ~/.local/bin
 install -m 755 web-harness ~/.local/bin/web-harness
 ~~~
 
-## Homebrew formula asset
+## Homebrew
 
-The release workflow also renders a version-specific `web-harness.rb` formula from the checked-in template and release checksums.
+The release workflow renders a version-specific Homebrew formula from the checked-in template and release checksums.
 
-Until a dedicated Homebrew tap is created, the generated formula can be downloaded from a GitHub Release and installed explicitly:
+Until the canonical public tap exists, download the generated formula from the release and install it explicitly:
 
 ~~~bash
 brew install --formula ./web-harness.rb
 ~~~
 
-The repository intentionally ships a formula template rather than hard-coding an owner/repository URL before the canonical public repository is fixed.
+Once the public repository/tap is fixed, the normal Homebrew command can replace this manual formula step.
+
+## From source
+
+Requirements:
+
+- Rust 1.80 or newer
+- Git
+- macOS or Linux
+
+~~~bash
+git clone YOUR_REPOSITORY_URL
+cd web-harness-rs
+cargo build --release
+~~~
+
+The binary is target/release/web-harness.
+
+## Next step
+
+After installation:
+
+~~~bash
+cd /path/to/project
+web-harness setup \
+  --workspace . \
+  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+
+web-harness connect
+~~~
+
+See Quick Start for the daily workflow.
 
 ## Documentation tooling
 
@@ -60,5 +78,4 @@ cargo install mdbook
 mdbook serve docs
 ~~~
 
-mdBook is a documentation build dependency only. It is not part of the runtime path.
-
+mdBook is only needed by documentation contributors.

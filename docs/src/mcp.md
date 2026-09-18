@@ -1,14 +1,12 @@
 # MCP Tool Model
 
-The architecture prefers a small number of high-value tools instead of dozens of narrow tools.
+The project deliberately keeps a small number of high-value tools rather than exposing a large command surface.
 
-## Implemented now
-
-### workspace_info
+## workspace_info
 
 Returns the canonical configured workspace root.
 
-### read_files
+## read_files
 
 Reads up to 16 UTF-8 files per call.
 
@@ -16,37 +14,60 @@ Current limits:
 
 - 256 KiB per file
 - 512 KiB total per batch
-- all paths must canonicalize inside the workspace
+- all paths must remain inside the workspace
 
-### search
+## search
 
 Uses the system ripgrep binary and returns at most 200 bounded matches.
 
-### workspace_instructions
+## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.
 
-### patch
+## patch
 
-Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace-scoped, updates require matching context, ambiguous hunks are rejected, and writes use a same-directory temporary file followed by rename.
+Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace scoped, updates require matching context, ambiguous hunks are rejected, and writes use same-directory temporary files followed by rename.
 
-### exec
+## exec
 
-Executes an argv-based command inside the workspace. Shell-string mode is intentionally absent. Foreground commands have a maximum 10 minute timeout and return at most 256 KiB from each output stream. Background execution is limited to two concurrent jobs. Until an OS sandbox backend is enabled, every execution first returns an approval ticket; the same request must be retried with its approved approval_id.
+Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent.
 
-### job
+On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
 
-Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job output is spilled to temporary files rather than accumulated without bound in memory. Owned process groups are terminated when the host exits.
+Foreground commands have a maximum 10 minute timeout and bounded stdout/stderr results. Background execution is limited to two concurrent jobs.
 
-### git
+## job
 
-Provides structured read-only status, diff, log, and show actions. Arbitrary Git argv and remote mutation are intentionally not exposed.
+Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job output spills to temporary files instead of growing without bound in memory. Owned process groups are terminated when the host exits.
 
-### permission
+## git
 
-Approves or denies one-time execution tickets. Tickets expire after five minutes, are SHA-256 bound to argv/cwd/background plus a per-process random secret, and are consumed after one successful authorization.
+Provides structured actions only.
 
-## Planned
+Read-only actions:
 
-Planned capabilities are not exposed until their security model and tests are in place.
+- status
+- diff
+- log
+- show
 
+Local mutation actions:
+
+- add
+- commit
+- switch
+- restore
+
+Remote mutation:
+
+- push
+
+Every mutation requires a one-time approval bound to the exact generated Git argv. Push receives a stronger approval description because it changes a remote repository.
+
+Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
+
+## permission
+
+Approves or denies one-time request-bound tickets. Tickets expire after five minutes and are consumed after one successful authorization.
+
+The same ticket cannot be reused for a different command or Git operation.
