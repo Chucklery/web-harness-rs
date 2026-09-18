@@ -3,8 +3,6 @@ use serde::Serialize;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -28,7 +26,8 @@ pub struct SetupResult {
     pub config_path: String,
     pub shell_config_path: String,
     pub shell_backup_path: Option<String>,
-    pub tunnel_wrapper: String,
+    pub tunnel_mode: String,
+    pub tunnel_client_path: Option<String>,
     pub tunnel_id: String,
     pub api_key_configured: bool,
     pub tunnel_client_available: bool,
@@ -42,6 +41,7 @@ pub struct SetupStatus {
     pub api_key_configured: bool,
     pub shell_config_path: String,
     pub tunnel_client_available: bool,
+    pub tunnel_client_path: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -91,9 +91,14 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
             eprintln!("Recommended runtime key permissions: Tunnels Read + Use");
             eprintln!(
                 "warning: web-harness will store CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY as plaintext in {}",
-                zshrc_path()?.display()
+                credential_store_path()?.display()
             );
+            #[cfg(not(windows))]
             eprintln!("the managed .zshrc file is written with owner-only permissions (0600)");
+            #[cfg(windows)]
+            eprintln!(
+                "protect this user-only credential file with your Windows account permissions"
+            );
         }
         let tunnel_id = match options.tunnel_id {
             Some(value) => value,
@@ -107,7 +112,7 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
         };
         validate_tunnel_id(&tunnel_id)?;
         validate_api_key(&api_key)?;
-        let backup = persist_zsh_credentials(&tunnel_id, &api_key)?;
+        let backup = persist_credentials(&tunnel_id, &api_key)?;
         (tunnel_id, api_key, backup)
     } else {
         let env = managed_shell_env()?;
@@ -119,23 +124,23 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
     } else if let Some(command) = options.tunnel_command_json {
         UserConfig::from_inputs(workspace, Some(&command))?
     } else {
-        let wrapper = generate_tunnel_wrapper()?;
-        UserConfig::from_wrapper(workspace, &wrapper)?
+        UserConfig::from_inputs(workspace, None)?
     };
     let config_path = config::save(&user_config)?;
-    let wrapper_path = user_config
-        .tunnel_command
-        .as_ref()
-        .and_then(|argv| argv.first())
-        .cloned()
-        .unwrap_or_default();
 
     Ok(SetupResult {
         workspace: workspace.display().to_string(),
         config_path: config_path.display().to_string(),
-        shell_config_path: zshrc_path()?.display().to_string(),
+        shell_config_path: credential_store_path()?.display().to_string(),
         shell_backup_path: shell_backup_path.map(|path| path.display().to_string()),
-        tunnel_wrapper: wrapper_path,
+        tunnel_mode: if user_config.tunnel_command.is_some() {
+            "custom command".into()
+        } else {
+            "direct bundled/installed tunnel-client".into()
+        },
+        tunnel_client_path: tunnel_client
+            .as_ref()
+            .map(|path| path.display().to_string()),
         tunnel_id,
         api_key_configured: !api_key.is_empty() || managed_shell_env()?.api_key.is_some(),
         tunnel_client_available: tunnel_client.is_some(),
@@ -145,13 +150,15 @@ pub fn setup(workspace: &Path, options: SetupOptions) -> Result<SetupResult, Onb
 pub fn status() -> Result<SetupStatus, OnboardingError> {
     let user_config = config::load_optional()?;
     let shell = managed_shell_env()?;
+    let tunnel_client = resolve_tunnel_client();
     Ok(SetupStatus {
         configured: user_config.is_some(),
         workspace: user_config.map(|value| value.workspace),
         tunnel_id: shell.tunnel_id,
         api_key_configured: shell.api_key.is_some(),
-        shell_config_path: zshrc_path()?.display().to_string(),
-        tunnel_client_available: resolve_tunnel_client().is_some(),
+        shell_config_path: credential_store_path()?.display().to_string(),
+        tunnel_client_available: tunnel_client.is_some(),
+        tunnel_client_path: tunnel_client.map(|path| path.display().to_string()),
     })
 }
 
@@ -160,8 +167,8 @@ pub fn format_setup_result(result: &SetupResult) -> String {
         "Configured web-harness.".to_string(),
         format!("workspace: {}", result.workspace),
         format!("config: {}", result.config_path),
-        format!("shell config: {}", result.shell_config_path),
-        "credential storage: plaintext managed .zshrc block (mode 0600)".to_string(),
+        format!("credential config: {}", result.shell_config_path),
+        credential_storage_description().to_string(),
         format!("tunnel_id: {}", result.tunnel_id),
         format!(
             "api_key: {}",
@@ -171,13 +178,16 @@ pub fn format_setup_result(result: &SetupResult) -> String {
                 "not managed by web-harness"
             }
         ),
-        format!("tunnel wrapper: {}", result.tunnel_wrapper),
+        format!("tunnel mode: {}", result.tunnel_mode),
     ];
     if let Some(backup) = &result.shell_backup_path {
         lines.push(format!("shell backup: {backup}"));
     }
     if result.tunnel_client_available {
         lines.push("tunnel-client: bundled/available".into());
+        if let Some(path) = &result.tunnel_client_path {
+            lines.push(format!("tunnel-client path: {path}"));
+        }
         lines.push("next: web-harness connect".into());
     } else {
         lines.push("tunnel-client: unavailable; reinstall web-harness".into());
@@ -201,7 +211,7 @@ pub fn format_setup_status(status: &SetupStatus) -> String {
                 "not configured"
             }
         ),
-        format!("shell config: {}", status.shell_config_path),
+        format!("credential config: {}", status.shell_config_path),
         format!(
             "tunnel-client: {}",
             if status.tunnel_client_available {
@@ -209,6 +219,10 @@ pub fn format_setup_status(status: &SetupStatus) -> String {
             } else {
                 "not found"
             }
+        ),
+        format!(
+            "tunnel-client path: {}",
+            status.tunnel_client_path.as_deref().unwrap_or("-")
         ),
     ]
     .join("\n")
@@ -221,7 +235,7 @@ pub struct ManagedShellEnv {
 }
 
 pub fn managed_shell_env() -> Result<ManagedShellEnv, OnboardingError> {
-    let path = zshrc_path()?;
+    let path = credential_store_path()?;
     managed_shell_env_at(&path)
 }
 
@@ -239,15 +253,12 @@ fn managed_shell_env_at(path: &Path) -> Result<ManagedShellEnv, OnboardingError>
     })
 }
 
-fn persist_zsh_credentials(
-    tunnel_id: &str,
-    api_key: &str,
-) -> Result<Option<PathBuf>, OnboardingError> {
-    let path = zshrc_path()?;
-    persist_zsh_credentials_at(&path, tunnel_id, api_key)
+fn persist_credentials(tunnel_id: &str, api_key: &str) -> Result<Option<PathBuf>, OnboardingError> {
+    let path = credential_store_path()?;
+    persist_credentials_at(&path, tunnel_id, api_key)
 }
 
-fn persist_zsh_credentials_at(
+fn persist_credentials_at(
     path: &Path,
     tunnel_id: &str,
     api_key: &str,
@@ -268,7 +279,7 @@ fn persist_zsh_credentials_at(
             "{}.web-harness.bak.{suffix}",
             path.file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or(".zshrc")
+                .unwrap_or("credentials.env")
         ));
         let safe_backup = remove_managed_block(&existing);
         atomic_write_private(&backup, safe_backup.as_bytes())?;
@@ -277,43 +288,29 @@ fn persist_zsh_credentials_at(
         None
     };
 
-    let block = format!(
-        "{BLOCK_START}\nexport {TUNNEL_ID_KEY}={}\nexport {API_KEY}={}\n{BLOCK_END}",
-        shell_quote(tunnel_id),
-        shell_quote(api_key)
-    );
+    let block = credential_block(tunnel_id, api_key);
     let updated = replace_managed_block(&existing, &block);
     atomic_write_private(&path, updated.as_bytes())?;
     Ok(backup)
 }
 
-fn generate_tunnel_wrapper() -> Result<PathBuf, OnboardingError> {
-    let config_path = config::config_path()?;
-    let dir = config_path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid config path"))?;
-    fs::create_dir_all(dir)?;
-    let path = dir.join("tunnel-wrapper.zsh");
-    let script = tunnel_wrapper_script();
-    atomic_write_private(&path, script.as_bytes())?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-    Ok(path)
-}
-
-fn tunnel_wrapper_script() -> &'static str {
-    r#"#!/bin/zsh
-set -eu
-
-: "${CONTROL_PLANE_TUNNEL_ID:?CONTROL_PLANE_TUNNEL_ID is required}"
-: "${CONTROL_PLANE_API_KEY:?CONTROL_PLANE_API_KEY is required}"
-: "${WEB_HARNESS_SERVER_BIN:?WEB_HARNESS_SERVER_BIN is required}"
-: "${WEB_HARNESS_WORKSPACE:?WEB_HARNESS_WORKSPACE is required}"
-: "${WEB_HARNESS_TUNNEL_CLIENT_BIN:?bundled tunnel-client path is required}"
-
-mcp_command="$(printf '%q' "$WEB_HARNESS_SERVER_BIN") serve --stdio --workspace $(printf '%q' "$WEB_HARNESS_WORKSPACE")"
-
-exec "$WEB_HARNESS_TUNNEL_CLIENT_BIN" run --mcp.command="$mcp_command"
-"#
+fn credential_block(tunnel_id: &str, api_key: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!(
+            "{BLOCK_START}\n{TUNNEL_ID_KEY}={}\n{API_KEY}={}\n{BLOCK_END}",
+            shell_quote(tunnel_id),
+            shell_quote(api_key)
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "{BLOCK_START}\nexport {TUNNEL_ID_KEY}={}\nexport {API_KEY}={}\n{BLOCK_END}",
+            shell_quote(tunnel_id),
+            shell_quote(api_key)
+        )
+    }
 }
 
 fn prompt_line(prompt: &str) -> Result<String, OnboardingError> {
@@ -325,40 +322,7 @@ fn prompt_line(prompt: &str) -> Result<String, OnboardingError> {
 }
 
 fn prompt_secret(prompt: &str) -> Result<String, OnboardingError> {
-    print!("{prompt}");
-    io::stdout().flush()?;
-    let stdin = io::stdin();
-    let fd = stdin.as_raw_fd();
-    let original = unsafe {
-        let mut termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut termios) != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        termios
-    };
-    let mut hidden = original;
-    hidden.c_lflag &= !libc::ECHO;
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &hidden) } != 0 {
-        return Err(io::Error::last_os_error().into());
-    }
-
-    struct EchoGuard {
-        fd: i32,
-        original: libc::termios,
-    }
-    impl Drop for EchoGuard {
-        fn drop(&mut self) {
-            unsafe {
-                libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
-            }
-        }
-    }
-    let _guard = EchoGuard { fd, original };
-    let mut value = String::new();
-    let result = stdin.read_line(&mut value);
-    println!();
-    result?;
-    Ok(value.trim().to_string())
+    Ok(rpassword::prompt_password(prompt)?.trim().to_string())
 }
 
 fn validate_tunnel_id(value: &str) -> Result<(), OnboardingError> {
@@ -382,12 +346,34 @@ fn validate_api_key(value: &str) -> Result<(), OnboardingError> {
     Ok(())
 }
 
-fn zshrc_path() -> Result<PathBuf, OnboardingError> {
-    if let Some(zdotdir) = std::env::var_os("ZDOTDIR") {
-        return Ok(PathBuf::from(zdotdir).join(".zshrc"));
+fn credential_store_path() -> Result<PathBuf, OnboardingError> {
+    #[cfg(windows)]
+    {
+        if let Some(root) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(root).join("web-harness/credentials.env"));
+        }
+        let home = config::user_home_dir().ok_or(config::ConfigError::MissingHome)?;
+        return Ok(home.join(".web-harness/credentials.env"));
     }
-    let home = std::env::var_os("HOME").ok_or(config::ConfigError::MissingHome)?;
-    Ok(PathBuf::from(home).join(".zshrc"))
+    #[cfg(not(windows))]
+    {
+        if let Some(zdotdir) = std::env::var_os("ZDOTDIR") {
+            return Ok(PathBuf::from(zdotdir).join(".zshrc"));
+        }
+        let home = config::user_home_dir().ok_or(config::ConfigError::MissingHome)?;
+        Ok(home.join(".zshrc"))
+    }
+}
+
+fn credential_storage_description() -> &'static str {
+    #[cfg(windows)]
+    {
+        "credential storage: plaintext user credentials.env file"
+    }
+    #[cfg(not(windows))]
+    {
+        "credential storage: plaintext managed .zshrc block (mode 0600)"
+    }
 }
 
 fn replace_managed_block(existing: &str, block: &str) -> String {
@@ -431,11 +417,13 @@ fn extract_managed_block(text: &str) -> Option<&str> {
 }
 
 fn extract_export(block: &str, key: &str) -> Option<String> {
-    let prefix = format!("export {key}=");
-    block
-        .lines()
-        .find_map(|line| line.strip_prefix(&prefix))
-        .and_then(shell_unquote)
+    let export_prefix = format!("export {key}=");
+    let plain_prefix = format!("{key}=");
+    block.lines().find_map(|line| {
+        line.strip_prefix(&export_prefix)
+            .or_else(|| line.strip_prefix(&plain_prefix))
+            .and_then(shell_unquote)
+    })
 }
 
 fn shell_quote(value: &str) -> String {
@@ -454,8 +442,16 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
     temp.as_file_mut().write_all(bytes)?;
     temp.as_file_mut().sync_all()?;
-    temp.as_file_mut()
-        .set_permissions(fs::Permissions::from_mode(0o600))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temp.as_file_mut()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
     temp.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
@@ -463,34 +459,94 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
 pub fn resolve_tunnel_client() -> Option<PathBuf> {
     if let Some(override_path) = std::env::var_os("WEB_HARNESS_TUNNEL_CLIENT_BIN") {
         let path = PathBuf::from(override_path);
-        if is_executable(&path) {
+        if is_usable_client(&path, cfg!(windows)) {
             return Some(path);
         }
     }
     let executable = std::env::current_exe().ok()?;
-    resolve_tunnel_client_from(&executable, std::env::var_os("PATH"))
+    resolve_tunnel_client_from(
+        &executable,
+        std::env::var_os("PATH"),
+        std::env::var_os("HOMEBREW_PREFIX"),
+        cfg!(windows),
+    )
 }
 
-fn resolve_tunnel_client_from(executable: &Path, path_env: Option<OsString>) -> Option<PathBuf> {
-    let executable_dir = executable.parent()?;
-    let mut candidates = vec![
-        executable_dir.join("libexec/web-harness/tunnel-client"),
-        executable_dir.join("../libexec/web-harness/tunnel-client"),
-    ];
+fn resolve_tunnel_client_from(
+    executable: &Path,
+    path_env: Option<OsString>,
+    homebrew_prefix: Option<OsString>,
+    windows: bool,
+) -> Option<PathBuf> {
+    let binary = if windows {
+        "tunnel-client.exe"
+    } else {
+        "tunnel-client"
+    };
+    let mut candidates = Vec::new();
+
     if let Some(path) = path_env {
-        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join("tunnel-client")));
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(binary)));
     }
+
+    let mut executable_paths = vec![executable.to_path_buf()];
+    if let Ok(canonical) = executable.canonicalize() {
+        if canonical != executable {
+            executable_paths.push(canonical);
+        }
+    }
+    for executable in executable_paths {
+        if let Some(dir) = executable.parent() {
+            for ancestor in dir.ancestors().take(6) {
+                candidates.push(ancestor.join("libexec/web-harness").join(binary));
+                candidates.push(ancestor.join("libexec").join(binary));
+            }
+        }
+    }
+
+    if !windows {
+        if let Some(prefix) = homebrew_prefix {
+            add_homebrew_candidates(&mut candidates, Path::new(&prefix), binary);
+        }
+        add_homebrew_candidates(&mut candidates, Path::new("/usr/local"), binary);
+        add_homebrew_candidates(&mut candidates, Path::new("/opt/homebrew"), binary);
+    }
+
     candidates
         .into_iter()
-        .find(|candidate| is_executable(candidate))
+        .find(|candidate| is_usable_client(candidate, windows))
 }
 
-fn is_executable(candidate: &Path) -> bool {
-    candidate.is_file()
-        && candidate
+fn add_homebrew_candidates(candidates: &mut Vec<PathBuf>, prefix: &Path, binary: &str) {
+    candidates.push(prefix.join("bin").join(binary));
+    candidates.push(
+        prefix
+            .join("opt/web-harness/libexec/web-harness")
+            .join(binary),
+    );
+    candidates.push(prefix.join("opt/tunnel-client/bin").join(binary));
+    candidates.push(prefix.join("opt/tunnel-client/libexec").join(binary));
+}
+
+fn is_usable_client(candidate: &Path, windows: bool) -> bool {
+    if !candidate.is_file() {
+        return false;
+    }
+    if windows {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return candidate
             .metadata()
             .map(|meta| meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+            .unwrap_or(false);
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -547,13 +603,16 @@ mod tests {
         assert!(!json.contains("CONTROL_PLANE_API_KEY"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn zshrc_update_is_idempotent_and_creates_private_backup() {
+    fn credential_update_is_idempotent_and_creates_private_backup() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let zshrc = dir.path().join(".zshrc");
         fs::write(&zshrc, "export PATH=/usr/bin\n").unwrap();
 
-        let first = persist_zsh_credentials_at(
+        let first = persist_credentials_at(
             &zshrc,
             "tunnel_0123456789abcdef0123456789abcdef",
             "sk-test-one",
@@ -561,7 +620,7 @@ mod tests {
         .unwrap();
         assert!(first.unwrap().exists());
 
-        let second = persist_zsh_credentials_at(
+        let second = persist_credentials_at(
             &zshrc,
             "tunnel_fedcba9876543210fedcba9876543210",
             "sk-test-two",
@@ -597,17 +656,22 @@ mod tests {
     }
 
     #[test]
-    fn generated_wrapper_references_env_not_secret_literal() {
-        let script = tunnel_wrapper_script();
-        assert!(script.contains("CONTROL_PLANE_API_KEY"));
-        assert!(script.contains("CONTROL_PLANE_TUNNEL_ID"));
-        assert!(script.contains("WEB_HARNESS_TUNNEL_CLIENT_BIN"));
-        assert!(script.contains("--mcp.command"));
-        assert!(!script.contains("sk-"));
+    fn parses_windows_style_credential_block() {
+        let block = format!(
+            "{BLOCK_START}\n{TUNNEL_ID_KEY}=\'tunnel_0123456789abcdef0123456789abcdef\'\n{API_KEY}=\'key\'\n{BLOCK_END}"
+        );
+        assert_eq!(
+            extract_export(&block, TUNNEL_ID_KEY).as_deref(),
+            Some("tunnel_0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(extract_export(&block, API_KEY).as_deref(), Some("key"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolves_release_archive_bundled_tunnel_client() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let executable = dir.path().join("web-harness");
         fs::write(&executable, "").unwrap();
@@ -617,28 +681,48 @@ mod tests {
         fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
-            resolve_tunnel_client_from(&executable, None).unwrap(),
+            resolve_tunnel_client_from(&executable, None, None, false).unwrap(),
             bundled
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolves_homebrew_bundled_tunnel_client() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("bin/web-harness");
+        let executable = dir.path().join("Cellar/web-harness/0.2.0/bin/web-harness");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, "").unwrap();
-        let bundled = dir.path().join("libexec/web-harness/tunnel-client");
+        let bundled = dir
+            .path()
+            .join("Cellar/web-harness/0.2.0/libexec/web-harness/tunnel-client");
         fs::create_dir_all(bundled.parent().unwrap()).unwrap();
         fs::write(&bundled, "").unwrap();
         fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
-            resolve_tunnel_client_from(&executable, None)
+            resolve_tunnel_client_from(&executable, None, None, false)
                 .unwrap()
                 .canonicalize()
                 .unwrap(),
             bundled.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn resolves_windows_release_client_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("web-harness.exe");
+        fs::write(&executable, "").unwrap();
+        let bundled = dir.path().join("libexec/web-harness/tunnel-client.exe");
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, "").unwrap();
+
+        assert_eq!(
+            resolve_tunnel_client_from(&executable, None, None, true).unwrap(),
+            bundled
         );
     }
 }

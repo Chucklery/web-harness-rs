@@ -17,7 +17,7 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("HOME is not available")]
+    #[error("user home directory is not available")]
     MissingHome,
     #[error("invalid tunnel command: {0}")]
     InvalidTunnel(String),
@@ -72,7 +72,11 @@ pub fn config_path() -> Result<PathBuf, ConfigError> {
     if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(root).join("web-harness/config.json"));
     }
-    let home = std::env::var_os("HOME").ok_or(ConfigError::MissingHome)?;
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("APPDATA") {
+        return Ok(PathBuf::from(root).join("web-harness/config.json"));
+    }
+    let home = user_home_dir().ok_or(ConfigError::MissingHome)?;
     Ok(PathBuf::from(home).join(".config/web-harness/config.json"))
 }
 
@@ -80,8 +84,20 @@ pub fn state_dir() -> Result<PathBuf, ConfigError> {
     if let Some(root) = std::env::var_os("XDG_STATE_HOME") {
         return Ok(PathBuf::from(root).join("web-harness"));
     }
-    let home = std::env::var_os("HOME").ok_or(ConfigError::MissingHome)?;
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+        return Ok(PathBuf::from(root).join("web-harness/state"));
+    }
+    let home = user_home_dir().ok_or(ConfigError::MissingHome)?;
     Ok(PathBuf::from(home).join(".local/state/web-harness"))
+}
+
+pub fn user_home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        return Some(PathBuf::from(home));
+    }
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 pub fn parse_tunnel_command(input: &str) -> Result<Vec<String>, ConfigError> {

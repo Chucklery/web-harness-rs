@@ -136,24 +136,25 @@ pub fn run(
     let patch = samples_metric(patch_samples, patch_error);
 
     let exec_iterations = iterations.min(100);
-    let true_path = if std::path::Path::new("/usr/bin/true").exists() {
-        "/usr/bin/true"
+    #[cfg(windows)]
+    let true_argv = vec![
+        "cmd.exe".to_string(),
+        "/C".to_string(),
+        "exit 0".to_string(),
+    ];
+    #[cfg(not(windows))]
+    let true_argv = vec![if std::path::Path::new("/usr/bin/true").exists() {
+        "/usr/bin/true".to_string()
     } else {
-        "/bin/true"
-    };
+        "/bin/true".to_string()
+    }];
     let manager = JobManager::new();
     let sandboxed = SandboxBackend::detect().enforced();
     let mut exec_samples = Vec::with_capacity(exec_iterations);
     let mut exec_error = None;
     for _ in 0..exec_iterations {
         let start = Instant::now();
-        match manager.run_foreground(
-            &bench_workspace,
-            &[true_path.to_string()],
-            None,
-            Some(2_000),
-            sandboxed,
-        ) {
+        match manager.run_foreground(&bench_workspace, &true_argv, None, Some(2_000), sandboxed) {
             Ok(result) if result.exit_code == Some(0) => {
                 exec_samples.push(start.elapsed().as_micros() as u64)
             }

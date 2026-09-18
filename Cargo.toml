@@ -19,6 +19,7 @@ libc = "0.2"
 sha2 = "0.10"
 getrandom = "0.4"
 tempfile = "3"
+rpassword = "7"
 
 [dev-dependencies]
 

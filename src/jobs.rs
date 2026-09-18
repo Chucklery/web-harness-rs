@@ -361,6 +361,7 @@ fn read_tail(path: &PathBuf, limit: usize) -> Result<(String, bool), std::io::Er
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn foreground_output_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
@@ -379,6 +380,7 @@ mod tests {
         assert!(!result.timed_out);
     }
 
+    #[cfg(unix)]
     #[test]
     fn background_job_can_be_polled() {
         let dir = tempfile::tempdir().unwrap();
@@ -402,6 +404,7 @@ mod tests {
         assert_eq!(output, "done");
     }
 
+    #[cfg(unix)]
     #[test]
     fn child_does_not_inherit_sensitive_environment() {
         let dir = tempfile::tempdir().unwrap();
@@ -425,6 +428,7 @@ mod tests {
         assert_eq!(result.stdout_tail, "");
     }
 
+    #[cfg(unix)]
     #[test]
     fn returned_output_is_redacted() {
         let dir = tempfile::tempdir().unwrap();

@@ -39,8 +39,8 @@ pub enum RuntimeError {
     Json(#[from] serde_json::Error),
     #[error("web-harness is not configured; run setup first")]
     NotConfigured,
-    #[error("tunnel command is not configured; run setup with --tunnel-command-json")]
-    TunnelNotConfigured,
+    #[error("OpenAI tunnel-client was not found; reinstall web-harness or set WEB_HARNESS_TUNNEL_CLIENT_BIN")]
+    TunnelClientUnavailable,
     #[error("configured workspace is invalid: {0}")]
     InvalidWorkspace(String),
 }
@@ -74,10 +74,6 @@ pub fn connect(
     }
 
     let workspace = selected_workspace;
-    let argv = user_config
-        .tunnel_command
-        .as_ref()
-        .ok_or(RuntimeError::TunnelNotConfigured)?;
 
     let state_dir = config::state_dir()?;
     fs::create_dir_all(&state_dir)?;
@@ -89,12 +85,25 @@ pub fn connect(
         workspace.root().display().to_string()
     ]);
 
-    let mut command = Command::new(&argv[0]);
     let shell_env = onboarding::managed_shell_env()
         .map_err(|error| RuntimeError::Io(std::io::Error::other(error.to_string())))?;
     let tunnel_client = onboarding::resolve_tunnel_client();
+    let mut command = if let Some(argv) = user_config.tunnel_command.as_ref() {
+        let mut command = Command::new(&argv[0]);
+        command.args(&argv[1..]);
+        command
+    } else {
+        let tunnel_client = tunnel_client
+            .as_ref()
+            .ok_or(RuntimeError::TunnelClientUnavailable)?;
+        let mcp_command = build_stdio_mcp_command(&current_exe, workspace.root());
+        let mut command = Command::new(tunnel_client);
+        command
+            .arg("run")
+            .arg(format!("--mcp.command={mcp_command}"));
+        command
+    };
     command
-        .args(&argv[1..])
         .env("WEB_HARNESS_SERVER_BIN", &current_exe)
         .env("WEB_HARNESS_SERVER_ARGS_JSON", server_args.to_string())
         .env("WEB_HARNESS_WORKSPACE", workspace.root())
@@ -284,12 +293,47 @@ fn remove_state() -> Result<(), RuntimeError> {
     Ok(())
 }
 
+fn build_stdio_mcp_command(executable: &Path, workspace: &Path) -> String {
+    format!(
+        "{} serve --stdio --workspace {}",
+        quote_command_arg(executable),
+        quote_command_arg(workspace)
+    )
+}
+
+fn quote_command_arg(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    }
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 fn process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     unsafe {
         return libc::kill(pid as i32, 0) == 0;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let filter = format!("PID eq {pid}");
+        let Ok(output) = Command::new("tasklist")
+            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+            .output()
+        else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        text.contains(&format!(",\"{pid}\","))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false
@@ -311,7 +355,20 @@ fn terminate_process_group(pid: u32) -> Result<(), std::io::Error> {
         }
         return Ok(());
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()?;
+        if status.success() || !process_alive(pid) {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "taskkill failed for tunnel pid {pid}"
+            )))
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         Ok(())
@@ -336,5 +393,16 @@ mod tests {
         let output = format_status(&value);
         assert!(output.contains("workspace: /tmp/project"));
         assert!(output.contains("status: disconnected"));
+    }
+
+    #[test]
+    fn stdio_command_quotes_paths() {
+        let command = build_stdio_mcp_command(
+            Path::new("/tmp/web harness"),
+            Path::new("/tmp/project with spaces"),
+        );
+        assert!(command.contains("serve --stdio --workspace"));
+        assert!(command.contains("web harness"));
+        assert!(command.contains("project with spaces"));
     }
 }
