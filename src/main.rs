@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod mcp;
+mod patch;
 mod search;
 mod workspace;
 

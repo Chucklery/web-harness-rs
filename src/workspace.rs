@@ -57,6 +57,27 @@ impl Workspace {
         Ok(canonical)
     }
 
+    pub fn resolve_for_write(&self, relative: impl AsRef<Path>) -> Result<PathBuf, WorkspaceError> {
+        let relative = relative.as_ref();
+        if relative.is_absolute() {
+            return Err(WorkspaceError::OutsideWorkspace(relative.to_path_buf()));
+        }
+        let candidate = self.root.join(relative);
+        if candidate.exists() {
+            return self.resolve(relative);
+        }
+        let parent = candidate.parent().unwrap_or(&self.root);
+        let canonical_parent = fs::canonicalize(parent)?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(WorkspaceError::OutsideWorkspace(candidate));
+        }
+        Ok(canonical_parent.join(
+            candidate
+                .file_name()
+                .ok_or_else(|| WorkspaceError::OutsideWorkspace(candidate.clone()))?,
+        ))
+    }
+
     pub fn read_text_bounded(
         &self,
         relative: impl AsRef<Path>,
@@ -153,5 +174,12 @@ mod tests {
         assert_eq!(agents.len(), 2);
         assert!(agents[0].ends_with("AGENTS.md"));
         assert!(agents[1].ends_with("src/AGENTS.md"));
+    }
+
+    #[test]
+    fn write_resolution_rejects_parent_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        assert!(ws.resolve_for_write("../outside.txt").is_err());
     }
 }

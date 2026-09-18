@@ -1,3 +1,4 @@
+use crate::patch;
 use crate::search;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
@@ -102,6 +103,16 @@ fn handle(request: Request, workspace: &Workspace) -> Response {
                     "properties": {"path": {"type": "string"}},
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "patch",
+                "description": "Apply a bounded Codex-style structured patch inside the workspace.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"patch": {"type": "string", "maxLength": 524288}},
+                    "required": ["patch"],
+                    "additionalProperties": false
+                }
             }
         ]})),
         "tools/call" => call_tool(&request.params, workspace),
@@ -196,6 +207,21 @@ fn call_tool(params: &Value, workspace: &Workspace) -> Result<Value, Value> {
             }
             Ok(
                 json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"instructions": instructions})).unwrap()}]}),
+            )
+        }
+        "patch" => {
+            let patch_text = params
+                .get("arguments")
+                .and_then(|value| value.get("patch"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.patch is required"}))?;
+            if patch_text.len() > 512 * 1024 {
+                return Err(json!({"code": -32020, "message": "patch exceeds 512 KiB"}));
+            }
+            let changed_paths = patch::apply(workspace, patch_text)
+                .map_err(|error| json!({"code": -32021, "message": error.to_string()}))?;
+            Ok(
+                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"changed_paths": changed_paths})).unwrap()}]}),
             )
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),

@@ -26,9 +26,12 @@ Uses the system ripgrep binary and returns at most 200 bounded matches.
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.
 
+### patch
+
+Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace-scoped, updates require matching context, ambiguous hunks are rejected, and writes use a same-directory temporary file followed by rename.
+
 ## Planned
 
-- structured patch
 - process execution
 - background jobs
 - structured Git
