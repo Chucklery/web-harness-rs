@@ -23,6 +23,14 @@ cargo build --release
 ./target/release/web-harness benchmark --workspace . --iterations 10000
 ~~~
 
+If the official tunnel client is already running, include its PID to measure combined idle RSS:
+
+~~~bash
+./target/release/web-harness benchmark   --workspace .   --iterations 10000   --tunnel-pid 12345
+~~~
+
+The report then includes tunnel_rss_kib, tunnel_plus_host_rss_kib, and evaluation of the < 150 MiB Tunnel + Host gate.
+
 Or write it to the benchmark evidence directory:
 
 ~~~bash
@@ -36,3 +44,14 @@ Unmeasured gates are represented as null; they are never silently treated as pas
 ## Current evidence
 
 The repository includes one physical 8 GiB Intel Mac release-mode snapshot. It satisfies the measured Host idle RSS and cold-start targets on that machine, but it is not a complete production gate because Tunnel + Host RSS and Apple Silicon 8 GiB evidence remain outstanding.
+
+
+## Release-gate aggregation
+
+Aggregate one or more benchmark evidence files:
+
+~~~bash
+web-harness release-gate   --evidence benchmarks/intel.json   --evidence benchmarks/apple-silicon.json
+~~~
+
+The output uses only pass, fail, and not_evaluated. A complete pass requires physical approximately-8-GiB evidence from both Intel and Apple Silicon macOS machines, plus measured Tunnel + Host RSS below 150 MiB. Missing evidence never becomes an implicit pass.

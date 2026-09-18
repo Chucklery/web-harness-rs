@@ -10,6 +10,7 @@ mod mcp;
 mod patch;
 mod permission;
 mod redact;
+mod release_gate;
 mod sandbox;
 mod search;
 mod tunnel;
@@ -44,6 +45,12 @@ enum Command {
         workspace: PathBuf,
         #[arg(long, default_value_t = 10_000)]
         iterations: usize,
+        #[arg(long)]
+        tunnel_pid: Option<u32>,
+    },
+    ReleaseGate {
+        #[arg(long = "evidence", value_name = "JSON", required = true)]
+        evidence: Vec<PathBuf>,
     },
     Tunnel {
         #[command(subcommand)]
@@ -125,10 +132,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Benchmark {
             workspace,
             iterations,
+            tunnel_pid,
         } => {
             let workspace = workspace::Workspace::new(workspace)?;
-            let report = benchmark::run(&workspace, iterations)?;
+            let report = benchmark::run(&workspace, iterations, tunnel_pid)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ReleaseGate { evidence } => {
+            let report = release_gate::evaluate(&evidence)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.overall == "fail" {
+                std::process::exit(2);
+            }
         }
         Command::Tunnel { command } => match command {
             TunnelCommand::Doctor { workspace } => {

@@ -16,6 +16,16 @@ Before a stable release, also require:
 - native OS sandbox enforcement and adversarial sandbox coverage
 - low-memory benchmarks on 8 GB Intel and Apple Silicon Macs
 
+Use the machine-readable release gate before tagging:
+
+~~~bash
+web-harness release-gate \
+  --evidence benchmarks/intel.json \
+  --evidence benchmarks/apple-silicon.json
+~~~
+
+not_evaluated means evidence is incomplete and is not equivalent to a release pass.
+
 Publishing and GitHub release creation are intentionally separate from CI validation.
 
 ## Release artifacts

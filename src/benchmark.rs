@@ -3,14 +3,14 @@ use crate::patch;
 use crate::sandbox::SandboxBackend;
 use crate::search;
 use crate::workspace::Workspace;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BenchmarkReport {
     pub schema_version: u32,
     pub timestamp_unix_s: u64,
@@ -21,7 +21,7 @@ pub struct BenchmarkReport {
     pub notes: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MachineInfo {
     pub os: String,
     pub arch: String,
@@ -29,7 +29,7 @@ pub struct MachineInfo {
     pub approximately_8gb: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GateTargets {
     pub host_idle_rss_max_mib: u64,
     pub tunnel_plus_host_idle_rss_max_mib: u64,
@@ -38,7 +38,7 @@ pub struct GateTargets {
     pub job_memory_log_buffer_max_kib: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Measurements {
     pub workspace_info: LatencyMetric,
     pub read_file: LatencyMetric,
@@ -48,7 +48,7 @@ pub struct Measurements {
     pub process: ProcessMetric,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LatencyMetric {
     pub iterations: usize,
     pub p50_us: u64,
@@ -56,21 +56,25 @@ pub struct LatencyMetric {
     pub p99_us: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OperationMetric {
     pub status: String,
     pub latency: Option<LatencyMetric>,
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProcessMetric {
     pub mcp_ready_ms: Option<u64>,
     pub idle_rss_kib: Option<u64>,
     pub idle_cpu_percent: Option<f64>,
+    #[serde(default)]
+    pub tunnel_rss_kib: Option<u64>,
+    #[serde(default)]
+    pub tunnel_plus_host_rss_kib: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GateEvaluation {
     pub host_idle_rss_under_80_mib: Option<bool>,
     pub cold_start_under_500_ms: Option<bool>,
@@ -81,6 +85,7 @@ pub struct GateEvaluation {
 pub fn run(
     workspace: &Workspace,
     iterations: usize,
+    tunnel_pid: Option<u32>,
 ) -> Result<BenchmarkReport, Box<dyn std::error::Error>> {
     let iterations = iterations.clamp(100, 100_000);
     let workspace_info = latency(iterations, || {
@@ -164,12 +169,14 @@ pub fn run(
     }
     let exec = samples_metric(exec_samples, exec_error);
 
-    let process = process_metrics(workspace)?;
+    let process = process_metrics(workspace, tunnel_pid)?;
     let machine = machine_info();
     let evaluation = GateEvaluation {
         host_idle_rss_under_80_mib: process.idle_rss_kib.map(|rss| rss < 80 * 1024),
         cold_start_under_500_ms: process.mcp_ready_ms.map(|ms| ms < 500),
-        tunnel_plus_host_idle_rss_under_150_mib: None,
+        tunnel_plus_host_idle_rss_under_150_mib: process
+            .tunnel_plus_host_rss_kib
+            .map(|rss| rss < 150 * 1024),
         tested_on_approximately_8gb_machine: machine.approximately_8gb,
     };
 
@@ -272,7 +279,10 @@ fn metric_from_samples(mut samples: Vec<u64>) -> LatencyMetric {
     }
 }
 
-fn process_metrics(workspace: &Workspace) -> Result<ProcessMetric, Box<dyn std::error::Error>> {
+fn process_metrics(
+    workspace: &Workspace,
+    tunnel_pid: Option<u32>,
+) -> Result<ProcessMetric, Box<dyn std::error::Error>> {
     let binary = std::env::current_exe()?;
     let workspace_arg = workspace.root().display().to_string();
     let start = Instant::now();
@@ -303,6 +313,13 @@ fn process_metrics(workspace: &Workspace) -> Result<ProcessMetric, Box<dyn std::
 
     let rss = ps_value(child.id(), "rss").and_then(|value| value.parse::<u64>().ok());
     let cpu = ps_value(child.id(), "%cpu").and_then(|value| value.parse::<f64>().ok());
+    let tunnel_rss = tunnel_pid
+        .and_then(|pid| ps_value(pid, "rss"))
+        .and_then(|value| value.parse::<u64>().ok());
+    let tunnel_plus_host_rss_kib = match (rss, tunnel_rss) {
+        (Some(host), Some(tunnel)) => Some(host + tunnel),
+        _ => None,
+    };
     drop(stdin);
     let _ = child.wait();
 
@@ -310,6 +327,8 @@ fn process_metrics(workspace: &Workspace) -> Result<ProcessMetric, Box<dyn std::
         mcp_ready_ms: Some(ready_ms),
         idle_rss_kib: rss,
         idle_cpu_percent: cpu,
+        tunnel_rss_kib: tunnel_rss,
+        tunnel_plus_host_rss_kib,
     })
 }
 

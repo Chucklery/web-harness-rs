@@ -21,6 +21,7 @@ All notable changes will be documented here.
 - Release packaging, checksums, multi-target GitHub Release workflow, and Homebrew formula template.
 - Secret redaction and minimized child-process environment inheritance.
 - Hardened command policy and macOS Seatbelt adversarial tests.
+- Optional Tunnel PID RSS sampling and explicit multi-machine release-gate aggregation.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 
