@@ -48,10 +48,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-pc-windows-msvc
-          - aarch64-pc-windows-msvc
-    runs-on: windows-latest
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
