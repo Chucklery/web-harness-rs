@@ -2,19 +2,24 @@
 
 The normal user path is setup once, then connect from whichever repository you want ChatGPT to work on.
 
-## 1. Configure the tunnel wrapper
+## 1. Run interactive setup
 
 ~~~bash
 cd /path/to/one/project
-
-web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+web-harness setup
 ~~~
 
-The wrapper configuration must not contain credentials. Use the official tunnel login state or environment instead.
+setup prompts for the OpenAI tunnel_id and runtime API key. API-key input is hidden.
 
-The wrapper receives WEB_HARNESS_SERVER_BIN, WEB_HARNESS_SERVER_ARGS_JSON, and WEB_HARNESS_WORKSPACE.
+The values are persisted as CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a web-harness-managed block in ~/.zshrc, while config.json stores only non-secret workspace/wrapper metadata.
+
+setup automatically creates the tunnel wrapper and reports whether tunnel-client is available on PATH.
+
+Inspect the configuration without showing the API key:
+
+~~~bash
+web-harness setup --show
+~~~
 
 ## 2. Connect a repository
 

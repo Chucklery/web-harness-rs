@@ -24,6 +24,7 @@ All notable changes will be documented here.
 - Optional Tunnel PID RSS sampling and explicit multi-machine release-gate aggregation.
 - User-facing setup/connect/status/disconnect lifecycle with stale PID recovery.
 - Approval-gated structured Git add/commit/switch/restore/push workflow.
+- Interactive tunnel setup with hidden API-key input, managed zsh configuration, automatic tunnel wrapper generation, and safe setup status display.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
 

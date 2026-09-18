@@ -1,6 +1,6 @@
 # Configuration
 
-web-harness keeps configuration deliberately small and does not store authentication secrets.
+web-harness keeps config.json deliberately small. In the convenience-first zsh flow, tunnel credentials are persisted separately in a managed ~/.zshrc block.
 
 ## User configuration
 
@@ -15,19 +15,48 @@ The current schema stores:
 - a default/setup workspace
 - optional tunnel wrapper argv
 
-Example setup:
+Normal setup is interactive:
+
+~~~bash
+web-harness setup
+~~~
+
+It prompts for tunnel_id and the runtime API key. The API-key prompt disables terminal echo.
+
+web-harness writes a managed block:
+
+~~~text
+# >>> web-harness tunnel >>>
+export CONTROL_PLANE_TUNNEL_ID='...'
+export CONTROL_PLANE_API_KEY='...'
+# <<< web-harness tunnel <<<
+~~~
+
+The target is ~/.zshrc, or ZDOTDIR/.zshrc when ZDOTDIR is set.
+
+The update is idempotent: repeated setup replaces this block instead of appending duplicates. The file is atomically rewritten with mode 0600. Before an update, web-harness creates a private backup with the managed secret block removed so old API keys are not duplicated into backup files.
+
+The generated wrapper lives next to config.json and contains no API-key literal. connect reads the managed block directly and injects the two environment variables, so a new terminal or manual source ~/.zshrc is not required.
+
+### Plaintext warning
+
+This design stores the runtime API key in plaintext in ~/.zshrc for convenience. Anyone who can read that file can read the key. Users who prefer stronger secret storage should use the advanced custom-wrapper flow instead.
+
+### Non-interactive setup
 
 ~~~bash
 web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /opt/bin/my-tunnel-wrapper
+  --tunnel-id tunnel_0123456789abcdef0123456789abcdef \
+  --api-key 'YOUR_RUNTIME_KEY'
 ~~~
 
-For the common case, --tunnel-wrapper stores one absolute wrapper path.
+Passing an API key on the command line is less private because shell history and local process inspection may expose it. Prefer interactive setup for normal use.
 
-Advanced users can instead use --tunnel-command-json with a bounded JSON argv array. It is still argv, not a shell string.
+### Advanced wrapper override
 
-web-harness rejects command arguments that appear to contain tokens, passwords, API keys, cookies, bearer credentials, or similar secrets.
+Advanced users can still use --tunnel-wrapper or --tunnel-command-json. These remain useful when authentication is handled externally.
+
+web-harness rejects secret-looking values embedded in --tunnel-command-json.
 
 ## Runtime state
 
@@ -69,3 +98,5 @@ The configured wrapper receives three environment variables:
 The wrapper is responsible for invoking the current official OpenAI Secure MCP Tunnel flow and launching/attaching the provided stdio MCP server as required by that flow.
 
 This indirection is intentional because official tunnel CLI flags and UI can evolve independently from web-harness.
+
+The automatically generated wrapper relies on the official CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY environment variables and invokes tunnel-client run with the stdio MCP binding.

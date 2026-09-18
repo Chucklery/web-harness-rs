@@ -28,6 +28,10 @@ Process stdout/stderr and externally injected tunnel acceptance output are passe
 
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
+For first-use convenience, interactive setup can persist CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc). API-key input disables terminal echo; the API key is not copied into config.json or the generated tunnel wrapper. The shell file is rewritten atomically with mode 0600.
+
+This is still plaintext credential storage. A local process or user that can read the shell file can recover the API key. Non-interactive --api-key is also less private because command-line arguments may enter shell history or be visible to local process inspection. Users with stronger secret-management requirements should use a custom wrapper or another external secret store.
+
 ## Command policy
 
 The exec path applies a lightweight policy before process creation. It rejects executable paths containing parent traversal and direct host-control executables such as shutdown/reboot, disk-management/formatting tools, and privilege-escalation front doors. It intentionally does not ban ordinary developer commands such as git, cargo, or file deletion inside the sandbox because the workspace/sandbox boundary is the primary authority boundary.

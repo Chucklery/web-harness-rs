@@ -44,19 +44,38 @@ cargo build --release
 
 ## 第一次配置
 
-进入一个项目，并配置用于调用当前 OpenAI 官方 Secure MCP Tunnel 流程的 wrapper：
+普通 macOS/zsh 用户直接使用交互式 setup：
 
 ~~~bash
 cd ~/code/my-project
 
-web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+web-harness setup
 ~~~
 
-不要把 token、cookie、密码或 API key 写进 wrapper 参数。认证应使用官方登录态或 Tunnel 客户端需要的环境。
+命令行会提示输入：
 
-wrapper 会收到 WEB_HARNESS_SERVER_BIN、WEB_HARNESS_SERVER_ARGS_JSON 和 WEB_HARNESS_WORKSPACE。
+- OpenAI tunnel_id
+- OpenAI runtime API key
+
+输入 API key 时终端不会回显。web-harness 会把 CONTROL_PLANE_TUNNEL_ID 和 CONTROL_PLANE_API_KEY 写入 ~/.zshrc（若设置了 ZDOTDIR，则写入 ZDOTDIR/.zshrc）中的受控 block，同时自动生成 tunnel wrapper；API key 不会写入 config.json 或 wrapper。
+
+这是便利优先的方案：API key 会以明文存在于 ~/.zshrc。web-harness 会把该文件权限设为 0600，并在更新前创建私有备份；如果不接受明文 shell 配置，应继续使用自定义 wrapper 或其他 secret 管理方式。
+
+查看不包含完整 key 的配置状态：
+
+~~~bash
+web-harness setup --show
+~~~
+
+自动化场景也支持非交互参数：
+
+~~~bash
+web-harness setup \
+  --tunnel-id tunnel_0123456789abcdef0123456789abcdef \
+  --api-key 'YOUR_RUNTIME_KEY'
+~~~
+
+普通用户优先使用交互模式，因为命令行参数中的 API key 可能进入 shell history，或短暂暴露给本机进程查看工具。
 
 ## 日常使用
 
@@ -110,6 +129,8 @@ Git 支持结构化 status / diff / log / show / add / commit / switch / restore
 - 写权限限制在 workspace / TMP
 - 子进程环境变量最小化
 - 输出敏感信息脱敏
+- API key 交互输入时关闭终端回显
+- Tunnel 凭据只写入 web-harness 管理的 ~/.zshrc block，不写入 config.json 或自动生成的 wrapper
 - approval 与具体请求绑定且一次性消费
 - Git mutation 结构化
 - 普通 connect 不把 Tunnel stdout/stderr 持久化到磁盘

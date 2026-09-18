@@ -44,19 +44,38 @@ cargo build --release
 
 ## First-time setup
 
-Choose the current project and configure the external wrapper that invokes the current official OpenAI Secure MCP Tunnel flow:
+For the normal macOS/zsh flow, setup is interactive:
 
 ~~~bash
 cd ~/code/my-project
 
-web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+web-harness setup
 ~~~
 
-Do not put tokens, cookies, passwords, or API keys in wrapper arguments. Use the official login state or environment expected by the tunnel client.
+You will be prompted for:
 
-The wrapper receives WEB_HARNESS_SERVER_BIN, WEB_HARNESS_SERVER_ARGS_JSON, and WEB_HARNESS_WORKSPACE.
+- OpenAI tunnel_id
+- OpenAI runtime API key
+
+The API key prompt disables terminal echo. web-harness stores CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a managed block in ~/.zshrc (or ZDOTDIR/.zshrc), generates its tunnel wrapper automatically, and keeps the API key out of config.json and the wrapper itself.
+
+This is intentionally convenience-first: ~/.zshrc contains the API key in plaintext. web-harness changes the managed file to mode 0600 and makes a private backup before updates, but users who do not want plaintext shell configuration should keep using a custom wrapper or external secret mechanism instead.
+
+Check the non-secret setup state with:
+
+~~~bash
+web-harness setup --show
+~~~
+
+For automation only, non-interactive setup is also available:
+
+~~~bash
+web-harness setup \
+  --tunnel-id tunnel_0123456789abcdef0123456789abcdef \
+  --api-key 'YOUR_RUNTIME_KEY'
+~~~
+
+Prefer interactive setup because command-line API keys may be retained in shell history or briefly visible to local process inspection.
 
 ## Daily use
 
@@ -110,6 +129,8 @@ Git supports structured status, diff, log, show, add, commit, switch, restore, a
 - workspace/TMP writes only
 - child environment minimization
 - output secret redaction
+- interactive API-key entry with terminal echo disabled
+- tunnel credentials stored only in the web-harness managed ~/.zshrc block, not config.json or the generated wrapper
 - one-time request-bound approvals
 - structured Git mutations
 - no persisted tunnel stdout/stderr during normal connect

@@ -69,12 +69,12 @@ After installation:
 
 ~~~bash
 cd /path/to/project
-web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+web-harness setup
 
 web-harness connect
 ~~~
+
+setup interactively asks for the OpenAI tunnel_id and runtime API key, writes them to the managed zsh configuration block, and generates the tunnel wrapper automatically.
 
 See Quick Start for the daily workflow.
 

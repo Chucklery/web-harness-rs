@@ -5,10 +5,27 @@
 Run setup first:
 
 ~~~bash
-web-harness setup \
-  --workspace . \
-  --tunnel-wrapper /absolute/path/to/tunnel-wrapper
+web-harness setup
 ~~~
+
+If setup says tunnel-client is not found, install the official OpenAI tunnel-client and make sure tunnel-client is on PATH. web-harness intentionally does not guess an installation command.
+
+## I changed the key but connect still fails
+
+Run interactive setup again. web-harness replaces its managed ~/.zshrc block rather than appending duplicates:
+
+~~~bash
+web-harness setup
+web-harness setup --show
+~~~
+
+connect reads the managed block directly, so you do not need to open a new terminal or source ~/.zshrc.
+
+## Where is my API key stored?
+
+In the default convenience flow it is plaintext in the web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc). It is not stored in config.json or the generated tunnel wrapper.
+
+The shell file is rewritten with mode 0600. Backups created by web-harness omit the managed secret block.
 
 ## connect says the tunnel command is not configured
 
@@ -84,4 +101,4 @@ The MCP protocol uses stdout. Diagnostic logging must go to stderr. Avoid printi
 
 ## Secure MCP Tunnel does not connect
 
-First run tunnel doctor to verify the local stdio MCP contract. Then validate the external wrapper against the current OpenAI Secure MCP Tunnel documentation. web-harness intentionally does not hard-code tunnel-client flags that can change.
+First run tunnel doctor to verify the local stdio MCP contract. Then confirm tunnel-client is on PATH and use setup --show to verify that tunnel_id and API-key presence are configured. The generated wrapper uses the official control-plane environment variables and the stdio MCP command binding.
