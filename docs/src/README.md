@@ -11,16 +11,23 @@ The project keeps responsibilities deliberately narrow:
 
 ## Current implementation
 
-The bootstrap release includes:
+The current pre-1.0 implementation includes:
 
 - a Rust CLI
 - workspace validation
 - canonical path guarding
-- MCP stdio JSON-RPC skeleton
+- MCP stdio JSON-RPC host
 - workspace_info
 - bounded read_files
+- ripgrep-backed search
+- scoped AGENTS discovery
+- structured patching
+- bounded foreground/background execution
+- background job lifecycle and output tails
+- structured read-only Git operations
+- one-time approval-bound execution
 
-Patch, search, process execution, jobs, Git gateway, sandboxing, and approval tickets are roadmap work.
+Native OS sandbox enforcement and real Secure MCP Tunnel end-to-end acceptance remain roadmap work.
 
 ## Design target
 

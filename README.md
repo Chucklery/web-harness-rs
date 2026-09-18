@@ -4,7 +4,7 @@ web-harness is a lightweight local Codex-style execution host designed to let Ch
 
 The project is intentionally not a second agent runtime. ChatGPT remains the agent; web-harness provides local execution capabilities.
 
-Status: early bootstrap. The current implementation provides a Rust CLI, MCP stdio skeleton, workspace validation, a path guard, workspace_info, and bounded read_files. Patch, exec, jobs, Git, sandbox, approvals, and tunnel end-to-end validation remain roadmap work.
+Status: active pre-1.0 development. The current implementation provides a Rust CLI, MCP stdio host, workspace/path guards, scoped AGENTS discovery, bounded reads/search, structured patching, bounded foreground/background execution, a JobManager, a read-only structured Git gateway, and one-time approval-bound execution. Native OS sandbox enforcement and real ChatGPT Secure MCP Tunnel end-to-end acceptance remain incomplete.
 
 ## Quick start
 
@@ -12,6 +12,8 @@ Status: early bootstrap. The current implementation provides a Rust CLI, MCP std
 cargo build
 cargo run -- doctor --workspace .
 cargo run -- workspace check .
+cargo run -- self-test --workspace .
+cargo run -- benchmark --workspace . --iterations 10000
 cargo run -- serve --stdio --workspace .
 ~~~
 
@@ -47,7 +49,9 @@ The full design blueprint lives in web-harness-final-architecture.md.
 
 ## Security
 
-The remote model is never treated as local authority. Current protections are limited to workspace canonicalization/path guarding and bounded reads. The complete sandbox and approval engine described in the architecture document is not implemented yet.
+The remote model is never treated as local authority. Workspace reads/writes are canonical-path scoped, model-facing data is bounded, process execution is argv-based with owned process groups, and execution requires a one-time approval ticket while OS sandbox enforcement is unavailable.
+
+The macOS Seatbelt backend described in the architecture is not implemented yet. Do not treat the current pre-1.0 release as a fully hardened remote-execution boundary.
 
 See SECURITY.md and docs/src/security.md.
 

@@ -4,7 +4,7 @@ web-harness 是一个轻量的本地 Codex 风格执行 Host，目标是让 Chat
 
 它不是第二个 Agent。ChatGPT 负责推理、规划与工具编排；web-harness 只负责本地执行能力。
 
-当前状态：早期 bootstrap。已实现 Rust CLI、MCP stdio 骨架、workspace 校验、路径边界保护、workspace_info 和带总量限制的 read_files。Patch、exec、后台 jobs、Git、sandbox、approval 和 Tunnel 端到端仍在路线图中。
+当前状态：pre-1.0 持续开发。已实现 Rust CLI、MCP stdio Host、workspace/path guard、AGENTS 作用域发现、受限读取/搜索、结构化 Patch、前台/后台进程执行、JobManager、结构化只读 Git Gateway，以及与具体执行请求绑定的一次性 approval。原生 OS sandbox 与真实 ChatGPT Secure MCP Tunnel 端到端验收仍未完成。
 
 ## 快速开始
 
@@ -12,6 +12,8 @@ web-harness 是一个轻量的本地 Codex 风格执行 Host，目标是让 Chat
 cargo build
 cargo run -- doctor --workspace .
 cargo run -- workspace check .
+cargo run -- self-test --workspace .
+cargo run -- benchmark --workspace . --iterations 10000
 cargo run -- serve --stdio --workspace .
 ~~~
 

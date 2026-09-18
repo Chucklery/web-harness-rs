@@ -7,12 +7,14 @@
 - path guard
 - bounded reads
 
-Status: bootstrap implemented.
+Status: implemented.
 
 ## Stage 2
 
 - ripgrep search
 - scoped AGENTS discovery
+
+Status: implemented.
 
 ## Stage 3
 
@@ -20,11 +22,15 @@ Status: bootstrap implemented.
 - safe apply
 - compact diff result
 
+Status: structured add/update/delete patching is implemented. Compact Git diff remains a separate Git tool call by design.
+
 ## Stage 4
 
 - bounded process execution
 - timeout and cancellation
 - process group handling
+
+Status: implemented for argv-based execution; shell-string mode is intentionally omitted.
 
 ## Stage 5
 
@@ -32,13 +38,27 @@ Status: bootstrap implemented.
 - bounded in-memory output
 - disk spill artifacts
 
-## Stage 6 and later
+Status: implemented for host-owned jobs with bounded returned tails and temporary-file spill.
+
+## Stage 6
 
 - structured Git gateway
+
+Status: implemented as read-only status/diff/log/show.
+
+## Stage 7
+
 - shared permission engine
-- macOS sandbox
 - approval tickets
-- tunnel end-to-end acceptance
+- macOS sandbox
+
+Status: approval-bound execution is implemented and structured workspace patches pass through the permission kernel. Native macOS Seatbelt enforcement remains incomplete and therefore process execution defaults to explicit approval.
+
+## Stage 8 and later
+
+- real ChatGPT Secure MCP Tunnel end-to-end acceptance
+- physical-machine 8 GB resource benchmarks
+- sandbox hardening
 - performance hardening
 
 UI and LSP remain optional and should only be added if real usage metrics justify them.
