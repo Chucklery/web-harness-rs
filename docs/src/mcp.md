@@ -18,10 +18,16 @@ Current limits:
 - 512 KiB total per batch
 - all paths must canonicalize inside the workspace
 
+### search
+
+Uses the system ripgrep binary and returns at most 200 bounded matches.
+
+### workspace_instructions
+
+Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.
+
 ## Planned
 
-- workspace instructions
-- search
 - structured patch
 - process execution
 - background jobs

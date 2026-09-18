@@ -1,3 +1,4 @@
+use crate::search;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -79,6 +80,28 @@ fn handle(request: Request, workspace: &Workspace) -> Response {
                     "required": ["paths"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "search",
+                "description": "Search workspace content using ripgrep with bounded results.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1, "maxLength": 1024},
+                        "max_results": {"type": "integer", "minimum": 1, "maximum": 200}
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "workspace_instructions",
+                "description": "Return scoped AGENTS.md instructions for a workspace-relative path.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "additionalProperties": false
+                }
             }
         ]})),
         "tools/call" => call_tool(&request.params, workspace),
@@ -132,6 +155,47 @@ fn call_tool(params: &Value, workspace: &Workspace) -> Result<Value, Value> {
             }
             Ok(
                 json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"files": files})).unwrap()}]}),
+            )
+        }
+        "search" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let query = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.query is required"}))?;
+            let max_results = arguments
+                .get("max_results")
+                .and_then(Value::as_u64)
+                .unwrap_or(100) as usize;
+            let matches = search::content_search(workspace, query, max_results)
+                .map_err(|error| json!({"code": -32010, "message": error.to_string()}))?;
+            Ok(
+                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"matches": matches})).unwrap()}]}),
+            )
+        }
+        "workspace_instructions" => {
+            let path = params
+                .get("arguments")
+                .and_then(|value| value.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or(".");
+            let files = workspace
+                .discover_agents(path)
+                .map_err(|error| json!({"code": -32011, "message": error.to_string()}))?;
+            let mut instructions = Vec::new();
+            for file in files {
+                let relative = file
+                    .strip_prefix(workspace.root())
+                    .unwrap_or(&file)
+                    .display()
+                    .to_string();
+                let text = workspace
+                    .read_text_bounded(&relative, 128 * 1024)
+                    .map_err(|error| json!({"code": -32011, "message": error.to_string()}))?;
+                instructions.push(json!({"path": relative, "text": text}));
+            }
+            Ok(
+                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"instructions": instructions})).unwrap()}]}),
             )
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),

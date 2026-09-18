@@ -71,6 +71,37 @@ impl Workspace {
         }
         Ok(fs::read_to_string(path)?)
     }
+
+    pub fn discover_agents(
+        &self,
+        relative: impl AsRef<Path>,
+    ) -> Result<Vec<PathBuf>, WorkspaceError> {
+        let target = self.resolve(relative)?;
+        let mut current = if target.is_dir() {
+            target
+        } else {
+            target.parent().unwrap_or(&self.root).to_path_buf()
+        };
+        let mut found = Vec::new();
+        loop {
+            let candidate = current.join("AGENTS.md");
+            if candidate.is_file() {
+                found.push(candidate);
+            }
+            if current == self.root {
+                break;
+            }
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            if !parent.starts_with(&self.root) {
+                break;
+            }
+            current = parent.to_path_buf();
+        }
+        found.reverse();
+        Ok(found)
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +139,19 @@ mod tests {
         fs::write(dir.path().join("big.txt"), "1234567890").unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         assert!(ws.read_text_bounded("big.txt", 4).is_err());
+    }
+
+    #[test]
+    fn discovers_scoped_agents_from_root_to_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "root").unwrap();
+        fs::write(dir.path().join("src/AGENTS.md"), "src").unwrap();
+        fs::write(dir.path().join("src/nested/file.rs"), "").unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let agents = ws.discover_agents("src/nested/file.rs").unwrap();
+        assert_eq!(agents.len(), 2);
+        assert!(agents[0].ends_with("AGENTS.md"));
+        assert!(agents[1].ends_with("src/AGENTS.md"));
     }
 }
