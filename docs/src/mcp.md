@@ -20,6 +20,8 @@ Current limits:
 
 Uses the system ripgrep binary and returns at most 200 bounded matches.
 
+The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
+
 ## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.

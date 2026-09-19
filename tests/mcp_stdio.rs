@@ -128,6 +128,142 @@ fn adaptive_runtime_control_tools_are_callable() {
     assert!(child.wait().unwrap().success());
 }
 
+#[cfg(unix)]
+#[test]
+fn stdio_mcp_batches_search_queries_with_one_result_budget() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    let tool_dir = tempfile::tempdir().unwrap();
+    let rg_path = tool_dir.path().join("rg");
+    std::fs::write(
+        &rg_path,
+        r#"#!/bin/sh
+case "$6" in
+  needle-alpha)
+    printf '%s\n' '{"type":"match","data":{"path":{"text":"./alpha.txt"},"lines":{"text":"needle-alpha\n"},"line_number":1}}'
+    ;;
+  needle-beta)
+    printf '%s\n' '{"type":"match","data":{"path":{"text":"./beta.txt"},"lines":{"text":"needle-beta\n"},"line_number":1}}'
+    ;;
+esac
+"#,
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&rg_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&rg_path, permissions).unwrap();
+    }
+    std::fs::write(
+        dir.path().join("alpha.txt"),
+        "needle-alpha\nneedle-shared\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("beta.txt"), "needle-beta\nneedle-shared\n").unwrap();
+
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                tool_dir.path().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"tools/call",
+            "params":{
+                "name":"search",
+                "arguments":{
+                    "queries":["needle-alpha","needle-beta"],
+                    "max_results":10
+                }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let response: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let payload: Value = serde_json::from_str(text).unwrap();
+    let results = payload["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["query"], "needle-alpha");
+    assert_eq!(results[1]["query"], "needle-beta");
+    assert_eq!(results[0]["matches"][0]["path"], "./alpha.txt");
+    assert_eq!(results[1]["matches"][0]["path"], "./beta.txt");
+    let total_matches: usize = results
+        .iter()
+        .map(|result| result["matches"].as_array().unwrap().len())
+        .sum();
+    assert!(total_matches <= 10);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn stdio_mcp_rejects_search_query_and_queries_together() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let mut child = Command::new(binary)
+        .args(["serve", "--stdio", "--workspace", "."])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"tools/call",
+            "params":{
+                "name":"search",
+                "arguments":{
+                    "query":"alpha",
+                    "queries":["beta"],
+                    "max_results":10
+                }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let response: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(response["error"]["code"], -32602);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
 #[test]
 fn git_mutation_requires_and_consumes_approval() {
     let binary = env!("CARGO_BIN_EXE_web-harness");
