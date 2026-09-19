@@ -47,11 +47,11 @@ try {
         throw "tunnel-client checksum manifest mismatch"
     }
 
-    $ChecksumLine = Get-Content $ChecksumsPath | Where-Object { $_ -match ("^[0-9a-fA-F]{64}\\s+" + [regex]::Escape($Archive) + "$") } | Select-Object -First 1
+    $ChecksumLine = Get-Content $ChecksumsPath | Where-Object { $_ -match ("^[0-9a-fA-F]{64}\s+" + [regex]::Escape($Archive) + "$") } | Select-Object -First 1
     if (-not $ChecksumLine) {
         throw "missing checksum for $Archive in upstream SHA256SUMS.txt"
     }
-    $ExpectedSha256 = ($ChecksumLine -split "\\s+")[0].ToLowerInvariant()
+    $ExpectedSha256 = ($ChecksumLine -split "\s+")[0].ToLowerInvariant()
 
     try {
         Invoke-WebRequest -Uri $PrimaryUrl -OutFile $ArchivePath -UseBasicParsing
