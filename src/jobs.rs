@@ -420,6 +420,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn execution_rejects_parent_cwd_escape() {
+        let outer = tempfile::tempdir().unwrap();
+        let workspace_dir = outer.path().join("workspace");
+        fs::create_dir(&workspace_dir).unwrap();
+        let ws = Workspace::new(&workspace_dir).unwrap();
+        let manager = JobManager::new();
+        let error = manager
+            .run_foreground(
+                &ws,
+                &["sh".into(), "-c".into(), "pwd".into()],
+                Some("../"),
+                Some(2_000),
+                false,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            JobError::Workspace(WorkspaceError::OutsideWorkspace(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn background_job_can_be_polled() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
@@ -449,8 +472,9 @@ mod tests {
         let ws = Workspace::new(dir.path()).unwrap();
         let mut manager = JobManager::new();
         let mut ids = Vec::new();
+        let mut first_artifacts = None;
 
-        for _ in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
+        for index in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
             let started = manager
                 .start(
                     &ws,
@@ -460,6 +484,10 @@ mod tests {
                 )
                 .unwrap();
             let id = started.id.clone();
+            if index == 0 {
+                let job = manager.jobs.get(&id).unwrap();
+                first_artifacts = Some((job.stdout_path.clone(), job.stderr_path.clone()));
+            }
             loop {
                 let status = manager.poll(&id).unwrap();
                 if status.state == "exited" {
@@ -473,6 +501,9 @@ mod tests {
         assert!(manager.jobs.len() <= MAX_RETAINED_COMPLETED_JOBS);
         assert!(!manager.jobs.contains_key(&ids[0]));
         assert!(!manager.jobs.contains_key(&ids[1]));
+        let (stdout_path, stderr_path) = first_artifacts.unwrap();
+        assert!(!stdout_path.exists());
+        assert!(!stderr_path.exists());
     }
 
     #[cfg(unix)]

@@ -138,6 +138,19 @@ mod tests {
     }
 
     #[test]
+    fn read_rejects_parent_escape() {
+        let outer = tempfile::tempdir().unwrap();
+        let workspace_dir = outer.path().join("workspace");
+        fs::create_dir(&workspace_dir).unwrap();
+        fs::write(outer.path().join("outside.txt"), "secret").unwrap();
+        let ws = Workspace::new(&workspace_dir).unwrap();
+        assert!(matches!(
+            ws.read_text_bounded("../outside.txt", 1024).unwrap_err(),
+            WorkspaceError::OutsideWorkspace(_)
+        ));
+    }
+
+    #[test]
     fn rejects_symlink_escape() {
         #[cfg(unix)]
         {
@@ -152,6 +165,22 @@ mod tests {
                 WorkspaceError::OutsideWorkspace(_)
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("escape")).unwrap();
+        let ws = Workspace::new(root.path()).unwrap();
+        assert!(matches!(
+            ws.resolve_for_write("escape/new.txt").unwrap_err(),
+            WorkspaceError::OutsideWorkspace(_)
+        ));
+        assert!(!outside.path().join("new.txt").exists());
     }
 
     #[test]
