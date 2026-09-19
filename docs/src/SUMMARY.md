@@ -22,3 +22,20 @@
   - [0005 Do not depend on codex-core](adr/0005-no-codex-core.md)
   - [0006 Bound resources and share permission policy](adr/0006-bounded-resources.md)
 
+## 中文文档
+
+- [概览](zh-CN/README.md)
+- [安装](zh-CN/installation.md)
+- [快速开始](zh-CN/quick-start.md)
+- [架构设计](zh-CN/architecture.md)
+- [配置说明](zh-CN/configuration.md)
+- [MCP 工具模型](zh-CN/mcp.md)
+- [ChatGPT Web 与安全 MCP Tunnel](zh-CN/tunnel.md)
+- [安全模型](zh-CN/security.md)
+- [开发指南](zh-CN/development.md)
+- [测试指南](zh-CN/testing.md)
+- [性能与 8GB 门槛](zh-CN/benchmarks.md)
+- [故障排查](zh-CN/troubleshooting.md)
+- [发布流程](zh-CN/release.md)
+- [路线图](zh-CN/roadmap.md)
+

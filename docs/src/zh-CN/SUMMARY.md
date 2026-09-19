@@ -1,0 +1,17 @@
+# 中文文档
+
+- [概览](README.md)
+- [安装](installation.md)
+- [快速开始](quick-start.md)
+- [架构设计](architecture.md)
+- [配置说明](configuration.md)
+- [MCP 工具模型](mcp.md)
+- [ChatGPT Web 与安全 MCP Tunnel](tunnel.md)
+- [安全模型](security.md)
+- [开发指南](development.md)
+- [测试指南](testing.md)
+- [性能与 8GB 门槛](benchmarks.md)
+- [故障排查](troubleshooting.md)
+- [发布流程](release.md)
+- [路线图](roadmap.md)
+- [语言切换说明](language-switch.md)
