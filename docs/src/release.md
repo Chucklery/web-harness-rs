@@ -30,7 +30,7 @@ Publishing and GitHub release creation are intentionally separate from CI valida
 
 ## Release artifacts
 
-The tag-triggered `.github/workflows/release.yml` builds locked release binaries for Linux x86_64, macOS Intel, macOS Apple Silicon, Windows x64, and Windows ARM64.
+The tag-triggered `.github/workflows/release.yml` first runs formatting, default/release-tools checks and tests, plus mdBook validation. Only after that gate passes does it build locked release binaries for Linux x86_64, macOS Intel, macOS Apple Silicon, Windows x64, and Windows ARM64.
 
 Each target is packaged with:
 
@@ -41,7 +41,7 @@ Each target is packaged with:
 - README.md
 - THIRD_PARTY_NOTICES.md
 
-The workflow produces per-archive SHA256 files for internal verification and publishes one aggregate `SHA256SUMS` alongside the five user-facing platform archives.
+Each platform archive is extracted and smoke-tested before upload. The packaged binary must report the tagged version, expose normal help/setup behavior, contain the runtime-only tunnel-client, exclude cloudflared, and exclude maintainer-only commands. The publish job requires exactly five platform archives, verifies them, and publishes one aggregate `SHA256SUMS` alongside those archives.
 
 Release assets intentionally exclude CI intermediates and package-manager metadata. Homebrew packaging is maintained separately from the GitHub Release attachment set.
 
@@ -52,7 +52,7 @@ Use the same packaging script as CI:
 ~~~bash
 host_target="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --release --locked --target "$host_target"
-./scripts/package-release.sh "$host_target" 0.3.0
+./scripts/package-release.sh "$host_target" 0.3.1
 ~~~
 
 Release archives intentionally use the default feature set. Maintainer-only benchmark and release-gate code is compiled only when `--features release-tools` is requested and is not shipped in normal archives.
@@ -60,7 +60,7 @@ Release archives intentionally use the default feature set. Maintainer-only benc
 The Homebrew renderer expects checksums for all release targets:
 
 ~~~bash
-./scripts/render-homebrew-formula.sh 0.3.0 dist dist/web-harness.rb
+./scripts/render-homebrew-formula.sh 0.3.1 dist dist/web-harness.rb
 ~~~
 
 ## Publishing

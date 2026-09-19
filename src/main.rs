@@ -22,6 +22,7 @@ mod workspace;
 
 #[derive(Debug, Parser)]
 #[command(name = "web-harness")]
+#[command(version)]
 #[command(about = "Lightweight local execution host for ChatGPT Web")]
 struct Cli {
     #[command(subcommand)]

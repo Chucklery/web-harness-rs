@@ -131,6 +131,8 @@ The MCP surface intentionally stays small:
 - git
 - permission
 
+ChatGPT connector compatibility additionally exposes the lightweight control tools `runtime_status`, `work_on_project`, `tool_manifest`, and `call_runtime_tool`. They only describe or dispatch to the same bounded local runtime and do not embed another agent.
+
 Git supports structured status, diff, log, show, add, commit, switch, restore, and push. Mutations require one-time approvals; push is explicitly identified as a remote high-risk mutation. Arbitrary Git argv is not exposed.
 
 ## Security model

@@ -2,18 +2,41 @@
 
 All notable changes will be documented here.
 
-## Unreleased
+## 0.3.1 - 2026-09-20
 
-### Changed
+### Performance
 
-- Release packaging now consumes OpenAI's official `tunnel-client-runtime` artifact instead of the full tunnel-client distribution.
-- Release/Homebrew bundles exclude cloudflared and the full tunnel-client CLI surface, while retaining required upstream license and SPDX evidence.
-- Default production builds now exclude maintainer-only benchmark/release-gate code behind an opt-in `release-tools` feature.
-- Release code generation is tuned for minimum size and Clap is built without unnecessary default UI features.
-- Completed background Job history is bounded and evicts stale log artifacts instead of growing for the lifetime of the MCP process.
-- Production atomic writes no longer depend on `tempfile`; that crate is restricted to tests and opt-in release tooling.
-- Maintainer-only benchmark/release-gate sources now live under `src/maintenance/`, keeping the runtime module tree focused on shipped functionality.
-- GitHub Releases now publish only five platform archives plus one aggregate `SHA256SUMS`; Homebrew metadata and per-target checksum intermediates are not release attachments.
+- Search now supports bounded multi-query batching with one shared result budget to reduce remote MCP round trips.
+- Default production builds keep maintainer-only benchmark/release-gate code behind the opt-in `release-tools` feature.
+- Release code generation remains tuned for minimum size and Clap is built without unnecessary default UI features.
+
+### Compatibility
+
+- Added a minimal Adaptive Runtime compatibility shim exposing `runtime_status`, `work_on_project`, `tool_manifest`, and `call_runtime_tool` so ChatGPT clients expecting the WebCodex-style control surface no longer receive `unknown tool`.
+- The compatibility gateway only routes to the existing bounded workspace tools and does not add a second agent runtime or expand workspace authority.
+
+### Security
+
+- Expanded workspace boundary regression coverage for parent read traversal, symlink writes, and execution cwd escapes.
+- Background Job regression coverage now verifies both bounded metadata retention and stale stdout/stderr artifact cleanup.
+
+### Runtime
+
+- Completed background Job history remains bounded and evicts stale log artifacts instead of growing for the lifetime of the MCP process.
+- Production atomic writes no longer depend on `tempfile`; that crate remains restricted to tests and opt-in release tooling.
+- Maintainer-only benchmark/release-gate sources remain under `src/maintenance/`, keeping the shipped runtime module tree focused.
+
+### Packaging
+
+- Release packaging consumes OpenAI's official `tunnel-client-runtime` artifact instead of the full tunnel-client distribution.
+- Release/Homebrew bundles exclude cloudflared and the full tunnel-client CLI surface while retaining required upstream license and SPDX evidence.
+- GitHub Releases publish only five platform archives plus one aggregate `SHA256SUMS`; Homebrew metadata and per-target checksum intermediates are not release attachments.
+
+### Release
+
+- Release CI now validates default and `release-tools` builds/tests plus mdBook before platform builds.
+- Packaged archives are extracted and smoke-tested before upload, including version/help/setup checks and runtime-only content gates.
+- Publish validation requires exactly the five supported platform archives before checksum generation.
 
 ## 0.3.0 - 2026-09-18
 

@@ -2,6 +2,17 @@
 
 The project deliberately keeps a small number of high-value tools rather than exposing a large command surface.
 
+## Adaptive Runtime compatibility controls
+
+For ChatGPT connector clients that expect a WebCodex-style control plane, the server also exposes:
+
+- `runtime_status`
+- `work_on_project`
+- `tool_manifest`
+- `call_runtime_tool`
+
+These are compatibility controls, not a second execution system. `call_runtime_tool` uses a fixed allowlist and forwards only to the normal bounded runtime tools below. `work_on_project` cannot switch the server to an arbitrary path; it accepts only the workspace configured when `web-harness serve --stdio` starts.
+
 ## workspace_info
 
 Returns the canonical configured workspace root.
