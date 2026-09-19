@@ -3,7 +3,7 @@ use crate::redact;
 use crate::sandbox;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const MAX_BACKGROUND_JOBS: usize = 2;
+const MAX_RETAINED_COMPLETED_JOBS: usize = 4;
 const OUTPUT_TAIL_BYTES: usize = 256 * 1024;
 const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -58,12 +59,14 @@ struct Job {
 
 pub struct JobManager {
     jobs: HashMap<String, Job>,
+    completed_order: VecDeque<String>,
 }
 
 impl JobManager {
     pub fn new() -> Self {
         Self {
             jobs: HashMap::new(),
+            completed_order: VecDeque::new(),
         }
     }
 
@@ -162,40 +165,58 @@ impl JobManager {
     }
 
     pub fn poll(&mut self, id: &str) -> Result<JobStatus, JobError> {
-        let job = self
-            .jobs
-            .get_mut(id)
-            .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-        if job.exit_code.is_none() {
-            if let Some(status) = job.child.try_wait()? {
-                job.exit_code = status.code().or(Some(-1));
+        let (state, exit_code, newly_completed) = {
+            let job = self
+                .jobs
+                .get_mut(id)
+                .ok_or_else(|| JobError::NotFound(id.to_string()))?;
+            let was_running = job.exit_code.is_none();
+            if was_running {
+                if let Some(status) = job.child.try_wait()? {
+                    job.exit_code = status.code().or(Some(-1));
+                }
             }
+            (
+                if job.exit_code.is_some() {
+                    "exited".to_string()
+                } else {
+                    "running".to_string()
+                },
+                job.exit_code,
+                was_running && job.exit_code.is_some(),
+            )
+        };
+        if newly_completed {
+            self.record_completed(id);
         }
         Ok(JobStatus {
             id: id.to_string(),
-            state: if job.exit_code.is_some() {
-                "exited".into()
-            } else {
-                "running".into()
-            },
-            exit_code: job.exit_code,
+            state,
+            exit_code,
         })
     }
 
     pub fn cancel(&mut self, id: &str) -> Result<JobStatus, JobError> {
-        let job = self
-            .jobs
-            .get_mut(id)
-            .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-        if job.exit_code.is_none() {
-            terminate(&mut job.child)?;
-            let status = job.child.wait()?;
-            job.exit_code = status.code().or(Some(-1));
+        let (exit_code, newly_completed) = {
+            let job = self
+                .jobs
+                .get_mut(id)
+                .ok_or_else(|| JobError::NotFound(id.to_string()))?;
+            let was_running = job.exit_code.is_none();
+            if was_running {
+                terminate(&mut job.child)?;
+                let status = job.child.wait()?;
+                job.exit_code = status.code().or(Some(-1));
+            }
+            (job.exit_code, was_running && job.exit_code.is_some())
+        };
+        if newly_completed {
+            self.record_completed(id);
         }
         Ok(JobStatus {
             id: id.to_string(),
             state: "cancelled".into(),
-            exit_code: job.exit_code,
+            exit_code,
         })
     }
 
@@ -214,10 +235,27 @@ impl JobManager {
     }
 
     fn refresh(&mut self) {
-        for job in self.jobs.values_mut() {
+        let mut completed = Vec::new();
+        for (id, job) in &mut self.jobs {
             if job.exit_code.is_none() {
                 if let Ok(Some(status)) = job.child.try_wait() {
                     job.exit_code = status.code().or(Some(-1));
+                    completed.push(id.clone());
+                }
+            }
+        }
+        for id in completed {
+            self.record_completed(&id);
+        }
+    }
+
+    fn record_completed(&mut self, id: &str) {
+        self.completed_order.push_back(id.to_string());
+        while self.completed_order.len() > MAX_RETAINED_COMPLETED_JOBS {
+            if let Some(evicted_id) = self.completed_order.pop_front() {
+                if let Some(job) = self.jobs.remove(&evicted_id) {
+                    let _ = fs::remove_file(job.stdout_path);
+                    let _ = fs::remove_file(job.stderr_path);
                 }
             }
         }
@@ -402,6 +440,39 @@ mod tests {
         }
         let (output, _) = manager.output(&started.id, "stdout").unwrap();
         assert_eq!(output, "done");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_background_jobs_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let mut ids = Vec::new();
+
+        for _ in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
+            let started = manager
+                .start(
+                    &ws,
+                    &["sh".into(), "-c".into(), "printf done".into()],
+                    None,
+                    false,
+                )
+                .unwrap();
+            let id = started.id.clone();
+            loop {
+                let status = manager.poll(&id).unwrap();
+                if status.state == "exited" {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            ids.push(id);
+        }
+
+        assert!(manager.jobs.len() <= MAX_RETAINED_COMPLETED_JOBS);
+        assert!(!manager.jobs.contains_key(&ids[0]));
+        assert!(!manager.jobs.contains_key(&ids[1]));
     }
 
     #[cfg(unix)]

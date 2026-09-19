@@ -1,3 +1,4 @@
+use crate::atomic_file;
 use crate::config::{self, UserConfig};
 use serde::Serialize;
 use std::ffi::OsString;
@@ -438,22 +439,7 @@ fn shell_unquote(value: &str) -> Option<String> {
 }
 
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.as_file_mut().write_all(bytes)?;
-    temp.as_file_mut().sync_all()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file_mut()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    temp.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    atomic_file::write(path, bytes, true)
 }
 
 pub fn resolve_tunnel_client() -> Option<PathBuf> {

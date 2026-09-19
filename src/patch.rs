@@ -1,6 +1,6 @@
+use crate::atomic_file;
 use crate::workspace::{Workspace, WorkspaceError};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use thiserror::Error;
 
@@ -77,12 +77,7 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(bytes)?;
-    temp.flush()?;
-    temp.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    atomic_file::write(path, bytes, false)
 }
 
 fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {

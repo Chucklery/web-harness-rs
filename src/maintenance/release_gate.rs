@@ -1,4 +1,4 @@
-use crate::benchmark::BenchmarkReport;
+use super::benchmark::BenchmarkReport;
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;

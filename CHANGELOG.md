@@ -8,6 +8,12 @@ All notable changes will be documented here.
 
 - Release packaging now consumes OpenAI's official `tunnel-client-runtime` artifact instead of the full tunnel-client distribution.
 - Release/Homebrew bundles exclude cloudflared and the full tunnel-client CLI surface, while retaining required upstream license and SPDX evidence.
+- Default production builds now exclude maintainer-only benchmark/release-gate code behind an opt-in `release-tools` feature.
+- Release code generation is tuned for minimum size and Clap is built without unnecessary default UI features.
+- Completed background Job history is bounded and evicts stale log artifacts instead of growing for the lifetime of the MCP process.
+- Production atomic writes no longer depend on `tempfile`; that crate is restricted to tests and opt-in release tooling.
+- Maintainer-only benchmark/release-gate sources now live under `src/maintenance/`, keeping the runtime module tree focused on shipped functionality.
+- GitHub Releases now publish only five platform archives plus one aggregate `SHA256SUMS`; Homebrew metadata and per-target checksum intermediates are not release attachments.
 
 ## 0.3.0 - 2026-09-18
 

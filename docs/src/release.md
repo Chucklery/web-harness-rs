@@ -19,7 +19,7 @@ Before a stable release, also require:
 Use the machine-readable release gate before tagging:
 
 ~~~bash
-web-harness release-gate \
+cargo run --release --features release-tools -- release-gate \
   --evidence benchmarks/intel.json \
   --evidence benchmarks/apple-silicon.json
 ~~~
@@ -35,17 +35,15 @@ The tag-triggered `.github/workflows/release.yml` builds locked release binaries
 Each target is packaged with:
 
 - web-harness
-- the pinned official OpenAI tunnel-client platform payload under libexec/web-harness/
+- the pinned official OpenAI `tunnel-client-runtime` binary plus required upstream legal/SPDX evidence under libexec/web-harness/
 - LICENSE
 - NOTICE
 - README.md
 - THIRD_PARTY_NOTICES.md
 
-The workflow produces per-archive SHA256 files and an aggregate `SHA256SUMS`, then renders a Homebrew formula from `packaging/homebrew/web-harness.rb.template`.
+The workflow produces per-archive SHA256 files for internal verification and publishes one aggregate `SHA256SUMS` alongside the five user-facing platform archives.
 
-The rendered formula for stable releases is published to:
-
-https://github.com/Chucklery/homebrew-tap
+Release assets intentionally exclude CI intermediates and package-manager metadata. Homebrew packaging is maintained separately from the GitHub Release attachment set.
 
 ## Local packaging check
 
@@ -56,6 +54,8 @@ host_target="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --release --locked --target "$host_target"
 ./scripts/package-release.sh "$host_target" 0.3.0
 ~~~
+
+Release archives intentionally use the default feature set. Maintainer-only benchmark and release-gate code is compiled only when `--features release-tools` is requested and is not shipped in normal archives.
 
 The Homebrew renderer expects checksums for all release targets:
 

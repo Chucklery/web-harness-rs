@@ -64,6 +64,7 @@ disconnect terminates the owned tunnel process group and removes the runtime sta
 web-harness doctor --workspace .
 web-harness self-test --workspace .
 web-harness tunnel doctor --workspace .
-web-harness benchmark --workspace . --iterations 10000
 web-harness serve --stdio --workspace .
 ~~~
+
+Benchmark and release-gate instrumentation is maintainer-only and is intentionally absent from the default production binary. Build with `--features release-tools` when collecting release evidence.

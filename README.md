@@ -167,9 +167,14 @@ Advanced commands include:
 web-harness doctor --workspace .
 web-harness self-test --workspace .
 web-harness tunnel doctor --workspace .
-web-harness benchmark --workspace . --iterations 10000
-web-harness release-gate --evidence benchmarks/example.json
 web-harness serve --stdio --workspace .
+~~~
+
+Maintainer-only benchmark and release-gate commands are compiled only with the `release-tools` feature so normal release binaries stay small:
+
+~~~bash
+cargo run --release --features release-tools -- benchmark --workspace . --iterations 10000
+cargo run --release --features release-tools -- release-gate --evidence benchmarks/example.json
 ~~~
 
 GitHub Pages deployment is configured in .github/workflows/docs.yml.

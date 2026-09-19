@@ -1,18 +1,19 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod benchmark;
+mod atomic_file;
 mod command_policy;
 mod config;
 mod exec;
 mod git;
 mod jobs;
+#[cfg(feature = "release-tools")]
+mod maintenance;
 mod mcp;
 mod onboarding;
 mod patch;
 mod permission;
 mod redact;
-mod release_gate;
 mod runtime;
 mod sandbox;
 mod search;
@@ -87,6 +88,7 @@ enum Command {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
     },
+    #[cfg(feature = "release-tools")]
     Benchmark {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
@@ -95,6 +97,7 @@ enum Command {
         #[arg(long)]
         tunnel_pid: Option<u32>,
     },
+    #[cfg(feature = "release-tools")]
     ReleaseGate {
         #[arg(long = "evidence", value_name = "JSON", required = true)]
         evidence: Vec<PathBuf>,
@@ -218,17 +221,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => println!("[WARN] git gateway: {error}"),
             }
         }
+        #[cfg(feature = "release-tools")]
         Command::Benchmark {
             workspace,
             iterations,
             tunnel_pid,
         } => {
             let workspace = workspace::Workspace::new(workspace)?;
-            let report = benchmark::run(&workspace, iterations, tunnel_pid)?;
+            let report = maintenance::benchmark::run(&workspace, iterations, tunnel_pid)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        #[cfg(feature = "release-tools")]
         Command::ReleaseGate { evidence } => {
-            let report = release_gate::evaluate(&evidence)?;
+            let report = maintenance::release_gate::evaluate(&evidence)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report.overall == "fail" {
                 std::process::exit(2);

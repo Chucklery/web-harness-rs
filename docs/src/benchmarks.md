@@ -19,7 +19,7 @@ The project treats low-memory Macs as a first-class target. Performance claims r
 Build and collect a JSON report:
 
 ~~~bash
-cargo build --release
+cargo build --release --features release-tools
 ./target/release/web-harness benchmark --workspace . --iterations 10000
 ~~~
 
@@ -51,7 +51,9 @@ The repository includes one physical 8 GiB Intel Mac release-mode snapshot. It s
 Aggregate one or more benchmark evidence files:
 
 ~~~bash
-web-harness release-gate   --evidence benchmarks/intel.json   --evidence benchmarks/apple-silicon.json
+cargo run --release --features release-tools -- release-gate   --evidence benchmarks/intel.json   --evidence benchmarks/apple-silicon.json
 ~~~
 
 The output uses only pass, fail, and not_evaluated. A complete pass requires physical approximately-8-GiB evidence from both Intel and Apple Silicon macOS machines, plus measured Tunnel + Host RSS below 150 MiB. Missing evidence never becomes an implicit pass.
+
+`benchmark` and `release-gate` are maintainer/release instrumentation and are intentionally excluded from the default production binary. Enable them explicitly with the `release-tools` Cargo feature.
