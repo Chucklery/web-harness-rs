@@ -34,7 +34,7 @@ This is still plaintext credential storage. A local process or user that can rea
 
 ## Bundled tunnel-client supply chain
 
-Official release/Homebrew packages redistribute the upstream OpenAI tunnel-client release payload rather than a locally modified fork. The packaging script pins the upstream tunnel-client version and platform ZIP SHA256 before extraction. The upstream LICENSE, NOTICE, dependency-license report, SPDX manifest, cloudflared manifest, and matching runtime binaries remain together under libexec/web-harness/.
+Official release/Homebrew packages redistribute OpenAI's narrow `tunnel-client-runtime` artifact rather than the full tunnel-client distribution or a locally modified fork. Packaging pins the upstream `SHA256SUMS.txt` digest, verifies the selected runtime ZIP against that manifest, and then copies only the runtime binary plus LICENSE, NOTICE, dependency-license report, and SPDX manifest under `libexec/web-harness/`. The full CLI and cloudflared companion are intentionally excluded.
 
 ## Command policy
 

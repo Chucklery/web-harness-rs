@@ -10,13 +10,15 @@ If Codex-derived source is introduced later, record the upstream repository, ups
 
 ## OpenAI tunnel-client
 
-Official web-harness release archives redistribute the OpenAI tunnel-client release payload so users do not need to install a separate tunnel package.
+Official web-harness release archives redistribute OpenAI's narrow `tunnel-client-runtime` artifact so users do not need to install a separate tunnel package.
 
 - Upstream: https://github.com/openai/tunnel-client
 - Pinned release: v0.0.14
+- Flavor: `runtime` (run-only command surface)
 - License: Apache License 2.0
-- Redistributed payload: the official platform ZIP contents for the matching web-harness release target, including tunnel-client, cloudflared, upstream LICENSE/NOTICE, dependency license report, SPDX manifest, and cloudflared manifest.
-- Integrity: scripts/fetch-tunnel-client.sh pins the upstream platform archive SHA256 before extraction.
+- Redistributed payload: the runtime binary, renamed locally to `tunnel-client` for compatibility, plus upstream LICENSE/NOTICE, dependency license report, and SPDX manifest.
+- Excluded payload: the full tunnel-client CLI, cloudflared, cloudflared manifest, admin/onboarding/Codex/profile-management command surface, and other files not required by the runtime bundle.
+- Integrity: packaging pins the upstream `SHA256SUMS.txt` digest and verifies the selected runtime archive against that manifest before extraction.
 
-The upstream LICENSE, NOTICE, dependency-license report, and SPDX files are preserved inside `libexec/web-harness/` in each packaged release.
+The retained upstream legal and SPDX evidence is preserved inside `libexec/web-harness/` in each packaged release.
 

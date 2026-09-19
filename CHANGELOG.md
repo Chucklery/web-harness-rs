@@ -4,6 +4,11 @@ All notable changes will be documented here.
 
 ## Unreleased
 
+### Changed
+
+- Release packaging now consumes OpenAI's official `tunnel-client-runtime` artifact instead of the full tunnel-client distribution.
+- Release/Homebrew bundles exclude cloudflared and the full tunnel-client CLI surface, while retaining required upstream license and SPDX evidence.
+
 ## 0.3.0 - 2026-09-18
 
 ### Added
