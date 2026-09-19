@@ -9,7 +9,24 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@mdbook
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate source, tests, and docs
+        run: |
+          cargo fmt --check
+          cargo check --all-targets
+          cargo test --all-targets
+          cargo check --all-targets --features release-tools
+          cargo test --all-targets --features release-tools
+          mdbook build docs
+
   build:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +53,26 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           ./scripts/package-release.sh "${{ matrix.target }}" "$version"
+      - name: Smoke packaged archive
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="dist/web-harness-${version}-${{ matrix.target }}.tar.gz"
+          smoke="$(mktemp -d)"
+          trap 'rm -rf "$smoke"' EXIT
+          tar -xzf "$archive" -C "$smoke"
+          "$smoke/web-harness" --version | grep -F "web-harness $version"
+          "$smoke/web-harness" serve --help >/dev/null
+          "$smoke/web-harness" setup --show >/dev/null
+          test -x "$smoke/libexec/web-harness/tunnel-client"
+          if find "$smoke" -type f \( -name 'cloudflared' -o -name 'cloudflared.exe' \) | grep -q .; then
+            echo "cloudflared must not be present in release archive" >&2
+            exit 1
+          fi
+          if "$smoke/web-harness" --help | grep -Eq '(^|[[:space:]])(benchmark|release-gate)([[:space:]]|$)'; then
+            echo "release-tools commands must not be present in production binary" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -43,6 +80,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +105,36 @@ jobs:
         run: |
           $version = "${env:GITHUB_REF_NAME}".Substring(1)
           ./scripts/package-release.ps1 -Target "${{ matrix.target }}" -Version $version
+      - name: Smoke packaged archive
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}".Substring(1)
+          $archive = Join-Path "dist" "web-harness-$version-${{ matrix.target }}.zip"
+          $smoke = Join-Path ([System.IO.Path]::GetTempPath()) ("web-harness-smoke-" + [guid]::NewGuid())
+          try {
+            Expand-Archive -Path $archive -DestinationPath $smoke -Force
+            $binary = Join-Path $smoke "web-harness.exe"
+            $versionOutput = & $binary --version
+            if ($versionOutput -notmatch [regex]::Escape("web-harness $version")) {
+              throw "packaged binary version mismatch: $versionOutput"
+            }
+            & $binary serve --help | Out-Null
+            & $binary setup --show | Out-Null
+            $tunnel = Join-Path $smoke "libexec/web-harness/tunnel-client.exe"
+            if (-not (Test-Path $tunnel -PathType Leaf)) {
+              throw "packaged tunnel-client runtime missing"
+            }
+            if (Get-ChildItem -Path $smoke -Recurse -File | Where-Object { $_.Name -in @("cloudflared", "cloudflared.exe") }) {
+              throw "cloudflared must not be present in release archive"
+            }
+            $help = (& $binary --help) -join "`n"
+            if ($help -match "(^|\s)(benchmark|release-gate)(\s|$)") {
+              throw "release-tools commands must not be present in production binary"
+            }
+          }
+          finally {
+            Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -83,11 +151,24 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - name: Create aggregate checksums
+      - name: Validate release set and create aggregate checksums
         shell: bash
         run: |
           cd dist
-          shasum -a 256 *.tar.gz *.zip > SHA256SUMS
+          version="${GITHUB_REF_NAME#v}"
+          expected=(
+            "web-harness-${version}-x86_64-unknown-linux-gnu.tar.gz"
+            "web-harness-${version}-x86_64-apple-darwin.tar.gz"
+            "web-harness-${version}-aarch64-apple-darwin.tar.gz"
+            "web-harness-${version}-x86_64-pc-windows-msvc.zip"
+            "web-harness-${version}-aarch64-pc-windows-msvc.zip"
+          )
+          for archive in "${expected[@]}"; do
+            test -f "$archive"
+          done
+          actual_count="$(find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
+          test "$actual_count" -eq 5
+          shasum -a 256 "${expected[@]}" > SHA256SUMS
           shasum -a 256 -c SHA256SUMS
       - name: Create or update GitHub release
         env:
