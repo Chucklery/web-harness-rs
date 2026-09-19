@@ -189,6 +189,60 @@ fn handle(
                     "required": ["action", "id"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "runtime_status",
+                "description": "Return compact status for the local web-harness adaptive runtime shim.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "compact": {"type": "boolean"},
+                        "client_id": {"type": "string"}
+                    },
+                    "additionalProperties": true
+                }
+            },
+            {
+                "name": "work_on_project",
+                "description": "Bind work to the already-configured local workspace without creating another agent runtime.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": {"type": "string"},
+                        "client_id": {"type": "string"},
+                        "path": {"type": "string"},
+                        "instruction": {"type": "string", "maxLength": 4000},
+                        "session_id": {"type": "string"}
+                    },
+                    "additionalProperties": true
+                }
+            },
+            {
+                "name": "tool_manifest",
+                "description": "Describe the bounded runtime tools that call_runtime_tool may invoke.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {"type": "string"},
+                        "category": {"type": "string"},
+                        "intent": {"type": "string"},
+                        "include_recommended_flows": {"type": "boolean"}
+                    },
+                    "additionalProperties": true
+                }
+            },
+            {
+                "name": "call_runtime_tool",
+                "description": "Invoke one existing bounded web-harness runtime tool through the compatibility gateway.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string"},
+                        "arguments": {"type": "object"}
+                    },
+                    "required": ["tool"],
+                    "additionalProperties": true
+                }
             }
         ]})),
         "tools/call" => call_tool(&request.params, workspace, jobs, permissions),
@@ -221,6 +275,130 @@ fn call_tool(
         .and_then(Value::as_str)
         .ok_or_else(|| json!({"code": -32602, "message": "missing tool name"}))?;
     match name {
+        "runtime_status" => {
+            let value = json!({
+                "service": "web-harness",
+                "version": env!("CARGO_PKG_VERSION"),
+                "runtime_exposure": "adaptive_shim",
+                "client_id": "local",
+                "tools": {
+                    "direct": 9,
+                    "control": 4
+                },
+                "projects": {
+                    "count": 1,
+                    "mode": "configured_workspace"
+                },
+                "connection_layers": {
+                    "stdio_runtime": {"status": "ready"},
+                    "workspace": {"status": "ready"}
+                },
+                "authority": {
+                    "workspace_boundary": true,
+                    "project_write": true,
+                    "shell": true,
+                    "git": true,
+                    "network": false
+                }
+            });
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "work_on_project" => {
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            if let Some(path) = arguments.get("path").and_then(Value::as_str) {
+                let requested = std::fs::canonicalize(path)
+                    .map_err(|error| json!({"code": -32050, "message": error.to_string()}))?;
+                if requested != workspace.root() {
+                    return Err(json!({
+                        "code": -32051,
+                        "message": "web-harness is bound to one configured workspace; requested path does not match it"
+                    }));
+                }
+            }
+            let session_id = arguments
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("wc_sess_local_{}", std::process::id()));
+            let value = json!({
+                "session_id": session_id,
+                "project": "web-harness:workspace",
+                "resolved_project": "web-harness:workspace",
+                "continuation": "configured_workspace",
+                "workspace": {
+                    "status": "ready",
+                    "root": workspace.root().display().to_string()
+                },
+                "readiness": {"status": "ready"},
+                "runtime": "adaptive_shim"
+            });
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "tool_manifest" => {
+            const RUNTIME_TOOLS: &[&str] = &[
+                "workspace_info",
+                "read_files",
+                "search",
+                "workspace_instructions",
+                "patch",
+                "exec",
+                "job",
+                "git",
+                "permission",
+            ];
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let requested = arguments.get("tool_name").and_then(Value::as_str);
+            let tools = RUNTIME_TOOLS
+                .iter()
+                .filter(|name| requested.map(|wanted| wanted == **name).unwrap_or(true))
+                .map(|name| {
+                    json!({
+                        "name": name,
+                        "route": "call_runtime_tool",
+                        "direct_tool_available": true,
+                        "input_schema_source": "tools/list"
+                    })
+                })
+                .collect::<Vec<_>>();
+            if requested.is_some() && tools.is_empty() {
+                return Err(json!({"code": -32602, "message": "unknown runtime tool"}));
+            }
+            let value = json!({
+                "runtime": "web-harness",
+                "tools": tools,
+                "recommended_flow": "Prefer direct tools; use call_runtime_tool only when the client expects an adaptive-runtime gateway."
+            });
+            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+        }
+        "call_runtime_tool" => {
+            const RUNTIME_TOOLS: &[&str] = &[
+                "workspace_info",
+                "read_files",
+                "search",
+                "workspace_instructions",
+                "patch",
+                "exec",
+                "job",
+                "git",
+                "permission",
+            ];
+            let arguments = params.get("arguments").unwrap_or(&Value::Null);
+            let tool = arguments
+                .get("tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"code": -32602, "message": "arguments.tool is required"}))?;
+            if !RUNTIME_TOOLS.contains(&tool) {
+                return Err(json!({
+                    "code": -32602,
+                    "message": format!("runtime tool is not exposed through the compatibility gateway: {tool}")
+                }));
+            }
+            let forwarded = json!({
+                "name": tool,
+                "arguments": arguments.get("arguments").cloned().unwrap_or_else(|| json!({}))
+            });
+            call_tool(&forwarded, workspace, jobs, permissions)
+        }
         "workspace_info" => Ok(json!({
             "content": [{"type": "text", "text": serde_json::to_string(&workspace.info()).unwrap()}]
         })),

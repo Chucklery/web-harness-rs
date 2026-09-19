@@ -50,9 +50,79 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
         "job",
         "git",
         "permission",
+        "runtime_status",
+        "work_on_project",
+        "tool_manifest",
+        "call_runtime_tool",
     ] {
         assert!(names.contains(&expected), "missing MCP tool: {expected}");
     }
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn adaptive_runtime_control_tools_are_callable() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("hello.txt"), "hello shim").unwrap();
+
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    for request in [
+        serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"runtime_status","arguments":{"compact":true}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"work_on_project","arguments":{"path":dir.path(),"instruction":"inspect"}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"tool_manifest","arguments":{"tool_name":"read_files"}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":4,"method":"tools/call",
+            "params":{
+                "name":"call_runtime_tool",
+                "arguments":{"tool":"read_files","arguments":{"paths":["hello.txt"]}}
+            }
+        }),
+    ] {
+        writeln!(stdin, "{}", request).unwrap();
+    }
+    stdin.flush().unwrap();
+
+    let status: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let status_text = status["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(status_text.contains(r#""runtime_exposure":"adaptive_shim""#));
+
+    let project: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert!(project.get("error").is_none());
+
+    let manifest: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let manifest_text = manifest["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(manifest_text.contains(r#""name":"read_files""#));
+
+    let routed: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let routed_text = routed["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(routed_text.contains("hello shim"));
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
