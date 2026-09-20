@@ -1,10 +1,7 @@
+use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
-use crate::workspace::Workspace;
+use crate::permission::Capability;
 use serde_json::{json, Value};
-
-const MAX_PATHS: usize = 16;
-const MAX_FILE_BYTES: usize = 256 * 1024;
-const MAX_BATCH_BYTES: usize = 512 * 1024;
 
 pub struct FileRuntime;
 
@@ -13,7 +10,18 @@ impl RuntimeTool for FileRuntime {
         "read_files"
     }
 
-    fn call(&self, workspace: &Workspace, arguments: &Value) -> Result<Value, RuntimeToolError> {
+    fn call(
+        &self,
+        context: &mut ExecutionContext<'_>,
+        arguments: &Value,
+    ) -> Result<Value, RuntimeToolError> {
+        context
+            .permissions()
+            .authorize(Capability::WorkspaceRead)
+            .map_err(|error| {
+                RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+            })?;
+        let limits = context.limits();
         let paths = arguments
             .get("paths")
             .and_then(Value::as_array)
@@ -24,7 +32,7 @@ impl RuntimeTool for FileRuntime {
                 )
             })?;
 
-        if paths.is_empty() || paths.len() > MAX_PATHS {
+        if paths.is_empty() || paths.len() > limits.max_read_paths {
             return Err(RuntimeToolError::new(
                 RuntimeErrorKind::InvalidArguments,
                 "paths must contain 1..=16 items",
@@ -37,8 +45,9 @@ impl RuntimeTool for FileRuntime {
             let path = path.as_str().ok_or_else(|| {
                 RuntimeToolError::new(RuntimeErrorKind::InvalidArguments, "path must be a string")
             })?;
-            let text = workspace
-                .read_text_bounded(path, MAX_FILE_BYTES)
+            let text = context
+                .workspace()
+                .read_text_bounded(path, limits.max_read_file_bytes)
                 .map_err(|error| {
                     RuntimeToolError::new(RuntimeErrorKind::Workspace, error.to_string())
                 })?;
@@ -48,7 +57,7 @@ impl RuntimeTool for FileRuntime {
                     "batch read exceeds 512 KiB",
                 )
             })?;
-            if total > MAX_BATCH_BYTES {
+            if total > limits.max_read_batch_bytes {
                 return Err(RuntimeToolError::new(
                     RuntimeErrorKind::LimitExceeded,
                     "batch read exceeds 512 KiB",
@@ -71,10 +80,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("a.txt"), "alpha").unwrap();
         fs::write(dir.path().join("b.txt"), "beta").unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
 
         let value = FileRuntime
-            .call(&workspace, &json!({"paths": ["a.txt", "b.txt"]}))
+            .call(&mut context, &json!({"paths": ["a.txt", "b.txt"]}))
             .unwrap();
 
         assert_eq!(value["files"][0]["text"], "alpha");
@@ -84,10 +96,13 @@ mod tests {
     #[test]
     fn rejects_invalid_path_batches() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
 
         let error = FileRuntime
-            .call(&workspace, &json!({"paths": []}))
+            .call(&mut context, &json!({"paths": []}))
             .unwrap_err();
 
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);

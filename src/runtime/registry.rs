@@ -1,7 +1,13 @@
+use super::context::ExecutionContext;
+use super::exec::ExecRuntime;
 use super::file::FileRuntime;
+use super::git::GitRuntime;
+use super::job::JobRuntime;
+use super::patch::PatchRuntime;
+use super::permission::PermissionRuntime;
 use super::search::SearchRuntime;
 use super::tool_trait::{RuntimeTool, RuntimeToolError};
-use crate::workspace::Workspace;
+use super::workspace::{WorkspaceInfoRuntime, WorkspaceInstructionsRuntime};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -23,15 +29,29 @@ impl RuntimeRegistry {
         self.tools.insert(tool.name(), Box::new(tool));
     }
 
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    pub fn names(&self) -> Vec<&'static str> {
+        let mut names = self.tools.keys().copied().collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    }
+
     pub fn call(
         &self,
         name: &str,
-        workspace: &Workspace,
+        context: &mut ExecutionContext<'_>,
         arguments: &Value,
     ) -> Option<Result<Value, RuntimeToolError>> {
         self.tools
             .get(name)
-            .map(|tool| tool.call(workspace, arguments))
+            .map(|tool| tool.call(context, arguments))
     }
 }
 
@@ -40,6 +60,13 @@ impl Default for RuntimeRegistry {
         let mut registry = Self::new();
         registry.register(FileRuntime);
         registry.register(SearchRuntime);
+        registry.register(ExecRuntime);
+        registry.register(JobRuntime);
+        registry.register(GitRuntime);
+        registry.register(WorkspaceInfoRuntime);
+        registry.register(WorkspaceInstructionsRuntime);
+        registry.register(PatchRuntime);
+        registry.register(PermissionRuntime);
         registry
     }
 }
@@ -53,5 +80,13 @@ mod tests {
         let registry = RuntimeRegistry::default();
         assert!(registry.tools.contains_key("read_files"));
         assert!(registry.tools.contains_key("search"));
+        assert!(registry.tools.contains_key("exec"));
+        assert!(registry.tools.contains_key("job"));
+        assert!(registry.tools.contains_key("git"));
+        assert!(registry.tools.contains_key("workspace_info"));
+        assert!(registry.tools.contains_key("workspace_instructions"));
+        assert!(registry.tools.contains_key("patch"));
+        assert!(registry.tools.contains_key("permission"));
+        assert_eq!(registry.len(), 9);
     }
 }

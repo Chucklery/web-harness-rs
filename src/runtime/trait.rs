@@ -1,4 +1,4 @@
-use crate::workspace::Workspace;
+use super::context::ExecutionContext;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -8,6 +8,7 @@ pub enum RuntimeErrorKind {
     Workspace,
     LimitExceeded,
     Execution,
+    Permission,
 }
 
 #[derive(Debug, Error)]
@@ -37,5 +38,9 @@ impl RuntimeToolError {
 pub trait RuntimeTool {
     fn name(&self) -> &'static str;
 
-    fn call(&self, workspace: &Workspace, arguments: &Value) -> Result<Value, RuntimeToolError>;
+    fn call(
+        &self,
+        context: &mut ExecutionContext<'_>,
+        arguments: &Value,
+    ) -> Result<Value, RuntimeToolError>;
 }

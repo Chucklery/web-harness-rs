@@ -8,8 +8,41 @@ use thiserror::Error;
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 const TICKET_TTL: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    WorkspaceRead,
+    WorkspaceWrite,
+    ProcessExecute,
+    JobControl,
+    GitRead,
+    GitLocalWrite,
+    GitRemoteWrite,
+}
+
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceRead => "workspace.read",
+            Self::WorkspaceWrite => "workspace.write",
+            Self::ProcessExecute => "process.execute",
+            Self::JobControl => "job.control",
+            Self::GitRead => "git.read",
+            Self::GitLocalWrite => "git.local.write",
+            Self::GitRemoteWrite => "git.remote.write",
+        }
+    }
+
+    pub fn requires_approval(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessExecute | Self::GitLocalWrite | Self::GitRemoteWrite
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecAuthorization {
+    pub capability: Capability,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub background: bool,
@@ -33,6 +66,8 @@ pub enum PermissionError {
     Mismatch,
     #[error("approval ticket has not been approved")]
     NotApproved,
+    #[error("capability requires explicit approval: {0}")]
+    ApprovalRequired(&'static str),
     #[error("failed to initialize approval secret")]
     Random,
 }
@@ -56,6 +91,13 @@ impl PermissionEngine {
             secret,
             tickets: HashMap::new(),
         })
+    }
+
+    pub fn authorize(&self, capability: Capability) -> Result<(), PermissionError> {
+        if capability.requires_approval() {
+            return Err(PermissionError::ApprovalRequired(capability.as_str()));
+        }
+        Ok(())
     }
 
     pub fn request_exec(&mut self, request: &ExecAuthorization) -> ApprovalRequest {
@@ -97,10 +139,6 @@ impl PermissionEngine {
         }
     }
 
-    pub fn authorize_workspace_patch(&self) -> Result<(), PermissionError> {
-        Ok(())
-    }
-
     pub fn approve(&mut self, id: &str) -> Result<(), PermissionError> {
         self.cleanup();
         let ticket = self.tickets.get_mut(id).ok_or(PermissionError::NotFound)?;
@@ -136,6 +174,7 @@ impl PermissionEngine {
     fn digest(&self, request: &ExecAuthorization) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.secret);
+        hasher.update(request.capability.as_str().as_bytes());
         for arg in &request.argv {
             hasher.update((arg.len() as u64).to_le_bytes());
             hasher.update(arg.as_bytes());
@@ -164,6 +203,7 @@ mod tests {
 
     fn request(argv: &[&str]) -> ExecAuthorization {
         ExecAuthorization {
+            capability: Capability::ProcessExecute,
             argv: argv.iter().map(|value| value.to_string()).collect(),
             cwd: Some(".".into()),
             background: false,
@@ -178,6 +218,20 @@ mod tests {
         engine.approve(&ticket.id).unwrap();
         assert!(matches!(
             engine.consume_exec(&ticket.id, &request(&["cargo", "check"])),
+            Err(PermissionError::Mismatch)
+        ));
+    }
+
+    #[test]
+    fn approval_is_bound_to_capability() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let request = request(&["git", "push"]);
+        let ticket = engine.request_action(&request, "test".into(), "test".into());
+        engine.approve(&ticket.id).unwrap();
+        let mut changed = request.clone();
+        changed.capability = Capability::GitRemoteWrite;
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &changed),
             Err(PermissionError::Mismatch)
         ));
     }

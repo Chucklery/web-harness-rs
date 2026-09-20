@@ -1,12 +1,10 @@
+use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
+use crate::permission::Capability;
 use crate::search;
-use crate::workspace::Workspace;
 use serde_json::{json, Value};
 
 const MAX_QUERY_BYTES: usize = 1024;
-const MAX_QUERIES: usize = 8;
-const DEFAULT_MAX_RESULTS: usize = 100;
-const MAX_RESULTS: usize = 200;
 
 pub struct SearchRuntime;
 
@@ -15,7 +13,18 @@ impl RuntimeTool for SearchRuntime {
         "search"
     }
 
-    fn call(&self, workspace: &Workspace, arguments: &Value) -> Result<Value, RuntimeToolError> {
+    fn call(
+        &self,
+        context: &mut ExecutionContext<'_>,
+        arguments: &Value,
+    ) -> Result<Value, RuntimeToolError> {
+        context
+            .permissions()
+            .authorize(Capability::WorkspaceRead)
+            .map_err(|error| {
+                RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+            })?;
+        let limits = context.limits();
         let query = arguments.get("query").and_then(Value::as_str);
         let queries = arguments.get("queries").and_then(Value::as_array);
         if query.is_some() == queries.is_some() {
@@ -28,8 +37,8 @@ impl RuntimeTool for SearchRuntime {
         let max_results = arguments
             .get("max_results")
             .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_MAX_RESULTS as u64) as usize;
-        if !(1..=MAX_RESULTS).contains(&max_results) {
+            .unwrap_or(100) as usize;
+        if !(1..=limits.max_search_results).contains(&max_results) {
             return Err(RuntimeToolError::new(
                 RuntimeErrorKind::InvalidArguments,
                 "max_results must be 1..=200",
@@ -38,15 +47,14 @@ impl RuntimeTool for SearchRuntime {
 
         if let Some(query) = query {
             validate_query(query)?;
-            let matches =
-                search::content_search(workspace, query, max_results).map_err(|error| {
-                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
-                })?;
+            let matches = search::content_search(context.workspace(), query, max_results).map_err(
+                |error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string()),
+            )?;
             return Ok(json!({"matches": matches}));
         }
 
         let queries = queries.expect("query shape validated above");
-        if queries.is_empty() || queries.len() > MAX_QUERIES {
+        if queries.is_empty() || queries.len() > limits.max_search_queries {
             return Err(RuntimeToolError::new(
                 RuntimeErrorKind::InvalidArguments,
                 "queries must contain 1..=8 items",
@@ -73,9 +81,9 @@ impl RuntimeTool for SearchRuntime {
             let matches = if per_query_limit == 0 {
                 Vec::new()
             } else {
-                search::content_search(workspace, query, per_query_limit).map_err(|error| {
-                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
-                })?
+                search::content_search(context.workspace(), query, per_query_limit).map_err(
+                    |error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string()),
+                )?
             };
             remaining_results = remaining_results.saturating_sub(matches.len());
             results.push(json!({"query": query, "matches": matches}));
@@ -102,9 +110,15 @@ mod tests {
     #[test]
     fn rejects_ambiguous_query_shape() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
         let error = SearchRuntime
-            .call(&workspace, &json!({"query": "alpha", "queries": ["beta"]}))
+            .call(
+                &mut context,
+                &json!({"query": "alpha", "queries": ["beta"]}),
+            )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
     }
@@ -112,10 +126,13 @@ mod tests {
     #[test]
     fn rejects_oversized_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
-        let queries = vec!["x"; MAX_QUERIES + 1];
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let queries = vec!["x"; context.limits().max_search_queries + 1];
         let error = SearchRuntime
-            .call(&workspace, &json!({"queries": queries}))
+            .call(&mut context, &json!({"queries": queries}))
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
     }

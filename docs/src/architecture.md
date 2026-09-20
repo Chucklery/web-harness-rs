@@ -41,9 +41,19 @@ The host does not run another model and does not embed a second agent loop.
 
 MCP transport is being separated from local tool execution through a small in-process Tool Runtime. The MCP layer remains responsible for protocol parsing, response envelopes, and transport-specific error mapping; runtime tools own bounded workspace operations.
 
-Phase 1 introduces a `RuntimeTool` interface and `RuntimeRegistry`. `read_files` and search are now dispatched through the registry for both direct MCP calls and the adaptive-runtime compatibility gateway. Exec, jobs, Git, patch, and permission handling still use the existing MCP dispatch path and are intentionally left for later migration phases.
+The `RuntimeTool` interface and `RuntimeRegistry` now dispatch all nine direct tools: workspace info/instructions, file reads, search, patch, exec, job control, Git, and approval-ticket administration. Direct MCP calls and the adaptive-runtime compatibility gateway share the same registry path.
 
 This boundary adds no second process, model loop, daemon, database, or new runtime dependency.
+
+### ExecutionContext and capabilities
+
+Runtime calls receive one `ExecutionContext` containing the workspace boundary, sandbox backend, permission engine, bounded limits, non-secret platform metadata, and Job manager access. This keeps security and resource policy out of individual MCP handlers.
+
+Permissions use explicit capabilities such as `workspace.read`, `workspace.write`, `process.execute`, `job.control`, `git.read`, `git.local.write`, and `git.remote.write`. Approval tickets are cryptographically bound to the requested capability as well as the exact command payload, so an approval cannot be replayed for a stronger capability.
+
+Git has its own runtime policy and never routes through the generic exec sandbox. Read-only operations (`status`, `diff`, `log`, `show`) use `git.read`; local mutations (`add`, `commit`, `switch`, `restore`) use `git.local.write`; `push` uses `git.remote.write`. Local and remote mutations require distinct one-time approval-bound command payloads.
+
+Runtime status and tool manifest are derived from `ExecutionContext` and `RuntimeRegistry` rather than duplicate MCP constants. The MCP module is therefore limited to JSON-RPC/MCP envelopes, the four adaptive compatibility control calls, and transport-specific error-code mapping.
 
 ## Why a small local surface
 

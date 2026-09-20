@@ -1,10 +1,9 @@
-use crate::exec;
-use crate::git;
 use crate::jobs::JobManager;
-use crate::patch;
-use crate::permission::{ExecAuthorization, PermissionEngine};
-use crate::runtime::{registry::RuntimeRegistry, RuntimeErrorKind, RuntimeToolError};
-use crate::sandbox::SandboxBackend;
+use crate::permission::PermissionEngine;
+use crate::runtime::{
+    manifest, registry::RuntimeRegistry, status, ExecutionContext, RuntimeErrorKind,
+    RuntimeToolError,
+};
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -279,12 +278,31 @@ fn runtime_content(value: Value) -> Value {
     json!({"content": [{"type": "text", "text": value.to_string()}]})
 }
 
-fn runtime_error(error: RuntimeToolError) -> Value {
+fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
     let code = match error.kind() {
         RuntimeErrorKind::InvalidArguments => -32602,
-        RuntimeErrorKind::Workspace => -32001,
-        RuntimeErrorKind::LimitExceeded => -32002,
-        RuntimeErrorKind::Execution => -32010,
+        RuntimeErrorKind::Workspace => match tool {
+            "workspace_instructions" => -32011,
+            _ => -32001,
+        },
+        RuntimeErrorKind::LimitExceeded => match tool {
+            "patch" => -32020,
+            _ => -32002,
+        },
+        RuntimeErrorKind::Execution => match tool {
+            "search" => -32010,
+            "exec" => -32030,
+            "job" => -32031,
+            "git" => -32040,
+            "patch" => -32021,
+            _ => -32603,
+        },
+        RuntimeErrorKind::Permission => match tool {
+            "exec" => -32032,
+            "git" => -32041,
+            "patch" => -32022,
+            _ => -32033,
+        },
     };
     json!({"code": code, "message": error.message()})
 }
@@ -300,41 +318,23 @@ fn call_tool(
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| json!({"code": -32602, "message": "missing tool name"}))?;
-    if let Some(result) = runtime.call(
-        name,
-        workspace,
-        params.get("arguments").unwrap_or(&Value::Null),
-    ) {
-        return result.map(runtime_content).map_err(runtime_error);
+    let runtime_result = {
+        let mut context = ExecutionContext::new(workspace, jobs, permissions);
+        runtime.call(
+            name,
+            &mut context,
+            params.get("arguments").unwrap_or(&Value::Null),
+        )
+    };
+    if let Some(result) = runtime_result {
+        return result
+            .map(runtime_content)
+            .map_err(|error| runtime_error(name, error));
     }
     match name {
         "runtime_status" => {
-            let value = json!({
-                "service": "web-harness",
-                "version": env!("CARGO_PKG_VERSION"),
-                "runtime_exposure": "adaptive_shim",
-                "client_id": "local",
-                "tools": {
-                    "direct": 9,
-                    "control": 4
-                },
-                "projects": {
-                    "count": 1,
-                    "mode": "configured_workspace"
-                },
-                "connection_layers": {
-                    "stdio_runtime": {"status": "ready"},
-                    "workspace": {"status": "ready"}
-                },
-                "authority": {
-                    "workspace_boundary": true,
-                    "project_write": true,
-                    "shell": true,
-                    "git": true,
-                    "network": false
-                }
-            });
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+            let context = ExecutionContext::new(workspace, jobs, permissions);
+            Ok(runtime_content(status::describe(runtime, &context)))
         }
         "work_on_project" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -368,59 +368,19 @@ fn call_tool(
             Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
         }
         "tool_manifest" => {
-            const RUNTIME_TOOLS: &[&str] = &[
-                "workspace_info",
-                "read_files",
-                "search",
-                "workspace_instructions",
-                "patch",
-                "exec",
-                "job",
-                "git",
-                "permission",
-            ];
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             let requested = arguments.get("tool_name").and_then(Value::as_str);
-            let tools = RUNTIME_TOOLS
-                .iter()
-                .filter(|name| requested.map(|wanted| wanted == **name).unwrap_or(true))
-                .map(|name| {
-                    json!({
-                        "name": name,
-                        "route": "call_runtime_tool",
-                        "direct_tool_available": true,
-                        "input_schema_source": "tools/list"
-                    })
-                })
-                .collect::<Vec<_>>();
-            if requested.is_some() && tools.is_empty() {
-                return Err(json!({"code": -32602, "message": "unknown runtime tool"}));
-            }
-            let value = json!({
-                "runtime": "web-harness",
-                "tools": tools,
-                "recommended_flow": "Prefer direct tools; use call_runtime_tool only when the client expects an adaptive-runtime gateway."
-            });
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+            manifest::describe(runtime, requested)
+                .map(runtime_content)
+                .map_err(|error| runtime_error("tool_manifest", error))
         }
         "call_runtime_tool" => {
-            const RUNTIME_TOOLS: &[&str] = &[
-                "workspace_info",
-                "read_files",
-                "search",
-                "workspace_instructions",
-                "patch",
-                "exec",
-                "job",
-                "git",
-                "permission",
-            ];
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             let tool = arguments
                 .get("tool")
                 .and_then(Value::as_str)
                 .ok_or_else(|| json!({"code": -32602, "message": "arguments.tool is required"}))?;
-            if !RUNTIME_TOOLS.contains(&tool) {
+            if !runtime.contains(tool) {
                 return Err(json!({
                     "code": -32602,
                     "message": format!("runtime tool is not exposed through the compatibility gateway: {tool}")
@@ -431,262 +391,6 @@ fn call_tool(
                 "arguments": arguments.get("arguments").cloned().unwrap_or_else(|| json!({}))
             });
             call_tool(&forwarded, workspace, jobs, permissions, runtime)
-        }
-        "workspace_info" => Ok(json!({
-            "content": [{"type": "text", "text": serde_json::to_string(&workspace.info()).unwrap()}]
-        })),
-        "workspace_instructions" => {
-            let path = params
-                .get("arguments")
-                .and_then(|value| value.get("path"))
-                .and_then(Value::as_str)
-                .unwrap_or(".");
-            let files = workspace
-                .discover_agents(path)
-                .map_err(|error| json!({"code": -32011, "message": error.to_string()}))?;
-            let mut instructions = Vec::new();
-            for file in files {
-                let relative = file
-                    .strip_prefix(workspace.root())
-                    .unwrap_or(&file)
-                    .display()
-                    .to_string();
-                let text = workspace
-                    .read_text_bounded(&relative, 128 * 1024)
-                    .map_err(|error| json!({"code": -32011, "message": error.to_string()}))?;
-                instructions.push(json!({"path": relative, "text": text}));
-            }
-            Ok(
-                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"instructions": instructions})).unwrap()}]}),
-            )
-        }
-        "patch" => {
-            permissions
-                .authorize_workspace_patch()
-                .map_err(|error| json!({"code": -32022, "message": error.to_string()}))?;
-            let patch_text = params
-                .get("arguments")
-                .and_then(|value| value.get("patch"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.patch is required"}))?;
-            if patch_text.len() > 512 * 1024 {
-                return Err(json!({"code": -32020, "message": "patch exceeds 512 KiB"}));
-            }
-            let changed_paths = patch::apply(workspace, patch_text)
-                .map_err(|error| json!({"code": -32021, "message": error.to_string()}))?;
-            Ok(
-                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"changed_paths": changed_paths})).unwrap()}]}),
-            )
-        }
-        "exec" => {
-            let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let argv = arguments
-                .get("argv")
-                .and_then(Value::as_array)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.argv is required"}))?
-                .iter()
-                .map(|value| {
-                    value.as_str().map(ToOwned::to_owned).ok_or_else(
-                        || json!({"code": -32602, "message": "argv items must be strings"}),
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let cwd = arguments.get("cwd").and_then(Value::as_str);
-            let background = arguments
-                .get("background")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let authorization = ExecAuthorization {
-                argv: argv.clone(),
-                cwd: cwd.map(ToOwned::to_owned),
-                background,
-            };
-            let sandbox = SandboxBackend::detect();
-            if !sandbox.enforced() {
-                if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
-                    permissions
-                        .consume_exec(approval_id, &authorization)
-                        .map_err(|error| json!({"code": -32032, "message": error.to_string()}))?;
-                } else {
-                    let approval = permissions.request_exec(&authorization);
-                    let value = serde_json::to_value(approval)
-                        .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
-                    return Ok(json!({
-                        "content": [{
-                            "type": "text",
-                            "text": json!({"status": "approval_required", "approval": value}).to_string()
-                        }]
-                    }));
-                }
-            }
-            let value = if background {
-                serde_json::to_value(
-                    exec::background(jobs, workspace, &argv, cwd, sandbox.enforced())
-                        .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
-                )
-            } else {
-                serde_json::to_value(
-                    exec::foreground(
-                        jobs,
-                        workspace,
-                        &argv,
-                        cwd,
-                        arguments.get("timeout_ms").and_then(Value::as_u64),
-                        sandbox.enforced(),
-                    )
-                    .map_err(|error| json!({"code": -32030, "message": error.to_string()}))?,
-                )
-            }
-            .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
-        }
-        "job" => {
-            let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
-                || json!({"code": -32602, "message": "arguments.action is required"}),
-            )?;
-            let id = arguments
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.id is required"}))?;
-            let value = match action {
-                "poll" => serde_json::to_value(
-                    jobs.poll(id)
-                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?,
-                )
-                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?,
-                "cancel" => serde_json::to_value(
-                    jobs.cancel(id)
-                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?,
-                )
-                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?,
-                "output" => {
-                    let stream = arguments
-                        .get("stream")
-                        .and_then(Value::as_str)
-                        .unwrap_or("stdout");
-                    let (text, truncated) = jobs
-                        .output(id, stream)
-                        .map_err(|error| json!({"code": -32031, "message": error.to_string()}))?;
-                    json!({"stream": stream, "text": text, "truncated": truncated})
-                }
-                _ => {
-                    return Err(json!({"code": -32602, "message": "unknown job action"}));
-                }
-            };
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
-        }
-        "git" => {
-            let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
-                || json!({"code": -32602, "message": "arguments.action is required"}),
-            )?;
-            let staged = arguments
-                .get("staged")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let pathspec = arguments
-                .get("pathspec")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let message = arguments.get("message").and_then(Value::as_str);
-            let branch = arguments.get("branch").and_then(Value::as_str);
-            let remote = arguments.get("remote").and_then(Value::as_str);
-            let refspec = arguments.get("refspec").and_then(Value::as_str);
-
-            if matches!(action, "add" | "commit" | "switch" | "restore" | "push") {
-                let argv =
-                    git::mutation_argv(action, staged, &pathspec, message, branch, remote, refspec)
-                        .map_err(|error| json!({"code": -32040, "message": error.to_string()}))?;
-                let authorization = ExecAuthorization {
-                    argv,
-                    cwd: Some(".".into()),
-                    background: false,
-                };
-                if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
-                    permissions
-                        .consume_exec(approval_id, &authorization)
-                        .map_err(|error| json!({"code": -32041, "message": error.to_string()}))?;
-                } else {
-                    let (summary, reason) = if action == "push" {
-                        (
-                            "Push Git commits to a remote".to_string(),
-                            "Git push changes a remote repository and requires explicit one-time approval".to_string(),
-                        )
-                    } else {
-                        (
-                            format!("Run structured git {action}"),
-                            "Git mutation changes the local repository and requires explicit one-time approval".to_string(),
-                        )
-                    };
-                    let approval = permissions.request_action(&authorization, summary, reason);
-                    let value = serde_json::to_value(approval)
-                        .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
-                    return Ok(json!({
-                        "content": [{
-                            "type": "text",
-                            "text": json!({"status": "approval_required", "approval": value}).to_string()
-                        }]
-                    }));
-                }
-            }
-
-            let result = match action {
-                "status" => git::status(workspace),
-                "diff" => git::diff(workspace, staged, &pathspec),
-                "log" => git::log(
-                    workspace,
-                    arguments.get("limit").and_then(Value::as_u64).unwrap_or(20),
-                ),
-                "show" => {
-                    let revision = arguments
-                        .get("revision")
-                        .and_then(Value::as_str)
-                        .unwrap_or("HEAD");
-                    git::show(workspace, revision)
-                }
-                "add" => git::add(workspace, &pathspec),
-                "commit" => git::commit(workspace, message.unwrap_or_default()),
-                "switch" => git::switch(workspace, branch.unwrap_or_default()),
-                "restore" => git::restore(workspace, staged, &pathspec),
-                "push" => git::push(workspace, remote, refspec),
-                _ => return Err(json!({"code": -32602, "message": "unknown git action"})),
-            }
-            .map_err(|error| json!({"code": -32040, "message": error.to_string()}))?;
-            let value = serde_json::to_value(result)
-                .map_err(|error| json!({"code": -32603, "message": error.to_string()}))?;
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
-        }
-        "permission" => {
-            let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let action = arguments.get("action").and_then(Value::as_str).ok_or_else(
-                || json!({"code": -32602, "message": "arguments.action is required"}),
-            )?;
-            let id = arguments
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.id is required"}))?;
-            match action {
-                "approve" => permissions
-                    .approve(id)
-                    .map_err(|error| json!({"code": -32033, "message": error.to_string()}))?,
-                "deny" => permissions
-                    .deny(id)
-                    .map_err(|error| json!({"code": -32033, "message": error.to_string()}))?,
-                _ => {
-                    return Err(json!({"code": -32602, "message": "unknown permission action"}));
-                }
-            }
-            Ok(
-                json!({"content": [{"type": "text", "text": json!({"status": "ok", "id": id}).to_string()}]}),
-            )
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
     }
