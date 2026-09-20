@@ -158,8 +158,9 @@ impl PermissionEngine {
         request: &ExecAuthorization,
     ) -> Result<(), PermissionError> {
         self.cleanup();
-        let ticket = self.tickets.remove(id).ok_or(PermissionError::NotFound)?;
+        let ticket = self.tickets.get(id).ok_or(PermissionError::NotFound)?;
         if ticket.expires <= Instant::now() {
+            self.tickets.remove(id);
             return Err(PermissionError::Expired);
         }
         if !ticket.approved {
@@ -168,6 +169,7 @@ impl PermissionEngine {
         if ticket.digest != self.digest(request) {
             return Err(PermissionError::Mismatch);
         }
+        self.tickets.remove(id);
         Ok(())
     }
 
@@ -247,5 +249,66 @@ mod tests {
             engine.consume_exec(&ticket.id, &request),
             Err(PermissionError::NotFound)
         ));
+    }
+
+    #[test]
+    fn mismatch_does_not_consume_ticket() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let approved = request(&["cargo", "test"]);
+        let ticket = engine.request_exec(&approved);
+        engine.approve(&ticket.id).unwrap();
+
+        // A mismatching consume must NOT invalidate the ticket.
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &request(&["cargo", "check"])),
+            Err(PermissionError::Mismatch)
+        ));
+
+        // The original approved request is still usable.
+        engine.consume_exec(&ticket.id, &approved).unwrap();
+
+        // But only once.
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &approved),
+            Err(PermissionError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn capability_mismatch_does_not_consume_ticket() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut approved = request(&["git", "push"]);
+        approved.capability = Capability::GitLocalWrite;
+        let ticket = engine.request_action(&approved, "test".into(), "test".into());
+        engine.approve(&ticket.id).unwrap();
+
+        let mut wrong_capability = approved.clone();
+        wrong_capability.capability = Capability::GitRemoteWrite;
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &wrong_capability),
+            Err(PermissionError::Mismatch)
+        ));
+
+        engine.consume_exec(&ticket.id, &approved).unwrap();
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &approved),
+            Err(PermissionError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn not_approved_ticket_is_preserved_until_approval() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let req = request(&["cargo", "test"]);
+        let ticket = engine.request_exec(&req);
+
+        // Consuming before approval must not destroy the ticket.
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &req),
+            Err(PermissionError::NotApproved)
+        ));
+
+        engine.approve(&ticket.id).unwrap();
+        engine.consume_exec(&ticket.id, &req).unwrap();
     }
 }
