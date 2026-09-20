@@ -104,6 +104,10 @@ fn adaptive_runtime_control_tools_are_callable() {
                 "arguments":{"tool":"read_files","arguments":{"paths":["hello.txt"]}}
             }
         }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":5,"method":"tools/call",
+            "params":{"name":"read_files","arguments":{"paths":["hello.txt"]}}
+        }),
     ] {
         writeln!(stdin, "{}", request).unwrap();
     }
@@ -123,6 +127,10 @@ fn adaptive_runtime_control_tools_are_callable() {
     let routed: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     let routed_text = routed["result"]["content"][0]["text"].as_str().unwrap();
     assert!(routed_text.contains("hello shim"));
+
+    let direct: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let direct_text = direct["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(direct_text, routed_text);
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

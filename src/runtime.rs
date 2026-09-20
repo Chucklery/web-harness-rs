@@ -1,3 +1,10 @@
+pub(crate) mod file;
+pub(crate) mod registry;
+#[path = "runtime/trait.rs"]
+pub(crate) mod tool_trait;
+
+pub(crate) use tool_trait::{RuntimeErrorKind, RuntimeToolError};
+
 use crate::config::{self, UserConfig};
 use crate::onboarding;
 use crate::sandbox;

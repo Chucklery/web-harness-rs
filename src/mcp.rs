@@ -3,6 +3,7 @@ use crate::git;
 use crate::jobs::JobManager;
 use crate::patch;
 use crate::permission::{ExecAuthorization, PermissionEngine};
+use crate::runtime::{registry::RuntimeRegistry, RuntimeErrorKind, RuntimeToolError};
 use crate::sandbox::SandboxBackend;
 use crate::search;
 use crate::workspace::Workspace;
@@ -34,6 +35,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     let mut stdout = io::stdout().lock();
     let mut jobs = JobManager::new();
     let mut permissions = PermissionEngine::new()?;
+    let runtime = RuntimeRegistry::default();
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -43,7 +45,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
             Ok(request) if request.id.is_none() && request.method.starts_with("notifications/") => {
                 continue;
             }
-            Ok(request) => handle(request, &workspace, &mut jobs, &mut permissions),
+            Ok(request) => handle(request, &workspace, &mut jobs, &mut permissions, &runtime),
             Err(error) => Response {
                 jsonrpc: "2.0",
                 id: None,
@@ -63,6 +65,7 @@ fn handle(
     workspace: &Workspace,
     jobs: &mut JobManager,
     permissions: &mut PermissionEngine,
+    runtime: &RuntimeRegistry,
 ) -> Response {
     if request.jsonrpc != "2.0" {
         return Response {
@@ -254,7 +257,7 @@ fn handle(
                 }
             }
         ]})),
-        "tools/call" => call_tool(&request.params, workspace, jobs, permissions),
+        "tools/call" => call_tool(&request.params, workspace, jobs, permissions, runtime),
         method => Err(json!({"code": -32601, "message": format!("method not found: {method}")})),
     };
     match result {
@@ -273,16 +276,37 @@ fn handle(
     }
 }
 
+fn runtime_content(value: Value) -> Value {
+    json!({"content": [{"type": "text", "text": value.to_string()}]})
+}
+
+fn runtime_error(error: RuntimeToolError) -> Value {
+    let code = match error.kind() {
+        RuntimeErrorKind::InvalidArguments => -32602,
+        RuntimeErrorKind::Workspace => -32001,
+        RuntimeErrorKind::LimitExceeded => -32002,
+    };
+    json!({"code": code, "message": error.message()})
+}
+
 fn call_tool(
     params: &Value,
     workspace: &Workspace,
     jobs: &mut JobManager,
     permissions: &mut PermissionEngine,
+    runtime: &RuntimeRegistry,
 ) -> Result<Value, Value> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| json!({"code": -32602, "message": "missing tool name"}))?;
+    if let Some(result) = runtime.call(
+        name,
+        workspace,
+        params.get("arguments").unwrap_or(&Value::Null),
+    ) {
+        return result.map(runtime_content).map_err(runtime_error);
+    }
     match name {
         "runtime_status" => {
             let value = json!({
@@ -406,36 +430,11 @@ fn call_tool(
                 "name": tool,
                 "arguments": arguments.get("arguments").cloned().unwrap_or_else(|| json!({}))
             });
-            call_tool(&forwarded, workspace, jobs, permissions)
+            call_tool(&forwarded, workspace, jobs, permissions, runtime)
         }
         "workspace_info" => Ok(json!({
             "content": [{"type": "text", "text": serde_json::to_string(&workspace.info()).unwrap()}]
         })),
-        "read_files" => {
-            let paths = params
-                .get("arguments")
-                .and_then(|v| v.get("paths"))
-                .and_then(Value::as_array)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.paths is required"}))?;
-            let mut total = 0usize;
-            let mut files = Vec::new();
-            for path in paths {
-                let path = path
-                    .as_str()
-                    .ok_or_else(|| json!({"code": -32602, "message": "path must be a string"}))?;
-                let text = workspace
-                    .read_text_bounded(path, 256 * 1024)
-                    .map_err(|error| json!({"code": -32001, "message": error.to_string()}))?;
-                total += text.len();
-                if total > 512 * 1024 {
-                    return Err(json!({"code": -32002, "message": "batch read exceeds 512 KiB"}));
-                }
-                files.push(json!({"path": path, "text": text}));
-            }
-            Ok(
-                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"files": files})).unwrap()}]}),
-            )
-        }
         "search" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             let query = arguments.get("query").and_then(Value::as_str);

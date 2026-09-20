@@ -37,6 +37,14 @@ web-harness owns:
 
 The host does not run another model and does not embed a second agent loop.
 
+## Tool Runtime boundary
+
+MCP transport is being separated from local tool execution through a small in-process Tool Runtime. The MCP layer remains responsible for protocol parsing, response envelopes, and transport-specific error mapping; runtime tools own bounded workspace operations.
+
+Phase 1 introduces a `RuntimeTool` interface and `RuntimeRegistry`. `read_files` is the first migrated tool and is dispatched through the registry for both direct MCP calls and the adaptive-runtime compatibility gateway. Search, exec, jobs, Git, patch, and permission handling still use the existing MCP dispatch path and are intentionally left for later migration phases.
+
+This boundary adds no second process, model loop, daemon, database, or new runtime dependency.
+
 ## Why a small local surface
 
 The dominant end-to-end latency is expected to come from remote round trips, not a few local microseconds. Therefore the design prioritizes batch operations, compact schemas, compact results, and bounded local state.
