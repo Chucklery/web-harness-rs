@@ -15,6 +15,20 @@ pub enum SearchError {
     Failed(String),
 }
 
+/// Reports whether ripgrep can actually be executed from the bounded
+/// environment the search tool uses.
+///
+/// Probing here rather than letting the first `search` call fail means a client
+/// can learn the dependency is missing before issuing a request that cannot
+/// succeed. The probe deliberately reuses [`env::apply`] so it observes the same
+/// PATH the real search will.
+pub fn ripgrep_available() -> bool {
+    let mut command = Command::new("rg");
+    command.arg("--version");
+    env::apply(&mut command);
+    matches!(command.output(), Ok(output) if output.status.success())
+}
+
 #[derive(Debug, Serialize)]
 pub struct SearchMatch {
     pub path: String,

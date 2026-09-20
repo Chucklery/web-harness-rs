@@ -1,5 +1,6 @@
 use super::context::ExecutionContext;
 use super::registry::RuntimeRegistry;
+use crate::search;
 use serde_json::{json, Value};
 
 pub fn describe(registry: &RuntimeRegistry, context: &ExecutionContext<'_>) -> Value {
@@ -14,6 +15,9 @@ pub fn describe(registry: &RuntimeRegistry, context: &ExecutionContext<'_>) -> V
         "projects":{"count":1,"mode":"configured_workspace"},
         "connection_layers":{"stdio_runtime":{"status":"ready"},"workspace":{"status":"ready"}},
         "environment":{"os":environment.os,"arch":environment.arch,"sandbox_enforced":sandbox.enforced()},
+        // Probed, not assumed: a client can see that `search` will fail before
+        // spending a request on it.
+        "dependencies":{"ripgrep":{"available":search::ripgrep_available(),"required_by":["search"]}},
         "authority":{"workspace_boundary":true,"project_write":true,"shell":true,"git":true,"network":false}
     })
 }
@@ -36,5 +40,23 @@ mod tests {
         let value = describe(&registry, &context);
         assert_eq!(value["tools"]["direct"], registry.len());
         assert!(!value["environment"]["os"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn status_reports_search_dependency_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let registry = RuntimeRegistry::default();
+        let value = describe(&registry, &context);
+        let ripgrep = &value["dependencies"]["ripgrep"];
+        assert!(ripgrep["available"].is_boolean());
+        assert_eq!(ripgrep["required_by"][0], "search");
+        assert_eq!(
+            ripgrep["available"].as_bool().unwrap(),
+            crate::search::ripgrep_available()
+        );
     }
 }
