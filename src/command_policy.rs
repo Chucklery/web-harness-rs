@@ -132,7 +132,13 @@ mod tests {
         ));
         // A wrapper hides the interpreter name and is not caught: this is a
         // policy filter, and the sandbox stays the boundary.
-        validate_argv(&["/usr/bin/env".into(), "sh".into(), "-c".into(), "pwd".into()]).unwrap();
+        validate_argv(&[
+            "/usr/bin/env".into(),
+            "sh".into(),
+            "-c".into(),
+            "pwd".into(),
+        ])
+        .unwrap();
     }
 
     #[test]
