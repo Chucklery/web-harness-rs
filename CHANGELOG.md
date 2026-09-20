@@ -2,6 +2,24 @@
 
 All notable changes will be documented here.
 
+## 0.3.2 - 2026-09-20
+
+### Runtime
+
+- Unified all nine direct workspace tools behind the in-process `RuntimeRegistry` and shared `ExecutionContext`, removing duplicated execution branches from the MCP transport layer.
+- Added dedicated File, Search, Exec, Job, Workspace, Patch, Permission, and Git runtime adapters while preserving the existing workspace boundary and bounded resource limits.
+- Runtime status and tool manifest now derive their tool/environment data from the runtime registry and execution context instead of duplicate MCP constants.
+
+### Security
+
+- Added explicit capabilities for workspace read/write, process execution, job control, Git read, Git local write, and Git remote write.
+- One-time approval tickets are now cryptographically bound to the requested capability in addition to argv, cwd, and background mode.
+- Git uses an isolated runtime policy with separate read-only, local-write, and remote-write risk classes; Git operations do not route through the generic exec sandbox.
+
+### Documentation
+
+- Added and expanded the Chinese documentation tree and synchronized architecture documentation with the new runtime and capability model.
+
 ## 0.3.1 - 2026-09-20
 
 ### Performance

@@ -52,7 +52,7 @@ Use the same packaging script as CI:
 ~~~bash
 host_target="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --release --locked --target "$host_target"
-./scripts/package-release.sh "$host_target" 0.3.1
+./scripts/package-release.sh "$host_target" 0.3.2
 ~~~
 
 Release archives intentionally use the default feature set. Maintainer-only benchmark and release-gate code is compiled only when `--features release-tools` is requested and is not shipped in normal archives.
@@ -60,7 +60,7 @@ Release archives intentionally use the default feature set. Maintainer-only benc
 The Homebrew renderer expects checksums for all release targets:
 
 ~~~bash
-./scripts/render-homebrew-formula.sh 0.3.1 dist dist/web-harness.rb
+./scripts/render-homebrew-formula.sh 0.3.2 dist dist/web-harness.rb
 ~~~
 
 ## Publishing
