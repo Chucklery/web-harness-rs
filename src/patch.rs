@@ -1,7 +1,6 @@
 use crate::atomic_file;
 use crate::workspace::{Workspace, WorkspaceError};
 use std::fs;
-use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -65,19 +64,42 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
         }
     }
 
+    // Two-phase commit: every file is staged before any target is touched, so a
+    // failure while preparing the third file cannot leave the first two already
+    // rewritten. Without this a multi-file patch was only atomic per file.
+    let mut staged = Vec::new();
     let mut changed = Vec::new();
     for (relative, target, content) in prepared {
-        match content {
-            Some(content) => atomic_write(&target, content.as_bytes())?,
-            None => fs::remove_file(&target)?,
+        let result = match &content {
+            Some(content) => atomic_file::stage(&target, content.as_bytes(), false),
+            None => atomic_file::stage_removal(&target),
+        };
+        match result {
+            Ok(entry) => {
+                staged.push(entry);
+                changed.push(relative);
+            }
+            Err(error) => {
+                for entry in staged {
+                    entry.discard();
+                }
+                return Err(PatchError::Io(error));
+            }
         }
-        changed.push(relative);
     }
-    Ok(changed)
-}
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    atomic_file::write(path, bytes, false)
+    let mut applied = 0usize;
+    for entry in staged {
+        if let Err(error) = entry.commit() {
+            // The files already committed stay committed; report the failure
+            // rather than pretending the patch was atomic across all of them.
+            return Err(PatchError::Io(error));
+        }
+        applied += 1;
+    }
+    debug_assert_eq!(applied, changed.len());
+
+    Ok(changed)
 }
 
 fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
@@ -192,6 +214,95 @@ mod tests {
             "created\n"
         );
         assert!(!dir.path().join("delete.txt").exists());
+    }
+
+    /// Creates a directory that rejects new files, or `None` when the process
+    /// can still write into it (for example when running as root).
+    ///
+    /// The failure has to happen while staging, not while parsing or preparing:
+    /// a bad hunk is rejected before any file is touched, so it cannot show
+    /// whether a partially applied patch is rolled back.
+    fn unwritable_dir(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        let dir = root.join(name);
+        fs::create_dir(&dir).unwrap();
+        let mut permissions = fs::metadata(&dir).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&dir, permissions).unwrap();
+        if fs::write(dir.join(".probe"), b"x").is_ok() {
+            let _ = fs::remove_file(dir.join(".probe"));
+            restore_dir(&dir);
+            return None;
+        }
+        Some(dir)
+    }
+
+    fn restore_dir(dir: &std::path::Path) {
+        let mut permissions = fs::metadata(dir).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+        }
+        #[cfg(not(unix))]
+        permissions.set_readonly(false);
+        fs::set_permissions(dir, permissions).unwrap();
+    }
+
+    #[test]
+    fn a_late_failure_leaves_earlier_files_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let Some(blocked) = unwritable_dir(dir.path(), "blocked") else {
+            return;
+        };
+        // `a.txt` stages cleanly; writing into `blocked/` cannot.
+        let patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: blocked/new.txt\n+created\n*** End Patch";
+        assert!(apply(&ws, patch).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "old\n",
+            "a.txt must not be rewritten when a sibling operation cannot be staged"
+        );
+        restore_dir(&blocked);
+    }
+
+    #[test]
+    fn a_late_failure_restores_deleted_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.txt"), "still here\n").unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let Some(blocked) = unwritable_dir(dir.path(), "blocked") else {
+            return;
+        };
+        let patch = "*** Begin Patch\n*** Delete File: keep.txt\n*** Add File: blocked/new.txt\n+created\n*** End Patch";
+        assert!(apply(&ws, patch).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("keep.txt")).unwrap(),
+            "still here\n",
+            "a delete must be rolled back when a sibling operation cannot be staged"
+        );
+        restore_dir(&blocked);
+    }
+
+    #[test]
+    fn staging_leaves_no_temporary_files_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let Some(blocked) = unwritable_dir(dir.path(), "blocked") else {
+            return;
+        };
+        let patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: blocked/new.txt\n+created\n*** End Patch";
+        assert!(apply(&ws, patch).is_err());
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".web-harness-"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
+        restore_dir(&blocked);
     }
 
     #[test]
