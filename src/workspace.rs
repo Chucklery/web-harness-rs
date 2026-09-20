@@ -11,22 +11,39 @@ pub enum WorkspaceError {
     NotDirectory(PathBuf),
     #[error("path is outside the workspace: {0}")]
     OutsideWorkspace(PathBuf),
+    #[error("path is excluded by the workspace boundary: {0}")]
+    Denied(PathBuf),
+    #[error("invalid boundary entry: {0}")]
+    InvalidBoundary(String),
     #[error("failed to access path: {0}")]
     Io(#[from] std::io::Error),
 }
 
+/// Paths that are inside the workspace but never worth handing to a remote
+/// agent: version-control internals and build output. They are excluded by
+/// default so that connecting in a project directory does not implicitly
+/// expose the whole checkout, including uncommitted history.
+pub const DEFAULT_DENY_PATHS: &[&str] = &[".git", "target", "node_modules"];
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
+    denied: Vec<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WorkspaceInfo {
     pub root: String,
+    pub denied: Vec<String>,
 }
 
 impl Workspace {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
+        Self::with_denied(root, &[])
+    }
+
+    /// Builds a workspace whose boundary additionally excludes `denied`.
+    pub fn with_denied(root: impl AsRef<Path>, denied: &[String]) -> Result<Self, WorkspaceError> {
         let root = root.as_ref();
         if !root.exists() {
             return Err(WorkspaceError::NotFound(root.to_path_buf()));
@@ -34,8 +51,13 @@ impl Workspace {
         if !root.is_dir() {
             return Err(WorkspaceError::NotDirectory(root.to_path_buf()));
         }
+        let denied = denied
+            .iter()
+            .map(|entry| validate_boundary_entry(entry))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             root: fs::canonicalize(root)?,
+            denied,
         })
     }
 
@@ -43,16 +65,37 @@ impl Workspace {
         &self.root
     }
 
+    pub fn denied(&self) -> Vec<String> {
+        self.denied
+            .iter()
+            .map(|entry| entry.display().to_string())
+            .collect()
+    }
+
     pub fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
             root: self.root.display().to_string(),
+            denied: self.denied(),
         }
+    }
+
+    /// True when `canonical` sits inside an excluded subtree.
+    fn is_denied(&self, canonical: &Path) -> bool {
+        let Ok(relative) = canonical.strip_prefix(&self.root) else {
+            return false;
+        };
+        self.denied
+            .iter()
+            .any(|denied| relative == denied || relative.starts_with(denied))
     }
 
     pub fn resolve(&self, relative: impl AsRef<Path>) -> Result<PathBuf, WorkspaceError> {
         let canonical = fs::canonicalize(self.root.join(relative.as_ref()))?;
         if !canonical.starts_with(&self.root) {
             return Err(WorkspaceError::OutsideWorkspace(canonical));
+        }
+        if self.is_denied(&canonical) {
+            return Err(WorkspaceError::Denied(canonical));
         }
         Ok(canonical)
     }
@@ -71,11 +114,15 @@ impl Workspace {
         if !canonical_parent.starts_with(&self.root) {
             return Err(WorkspaceError::OutsideWorkspace(candidate));
         }
-        Ok(canonical_parent.join(
+        let resolved = canonical_parent.join(
             candidate
                 .file_name()
                 .ok_or_else(|| WorkspaceError::OutsideWorkspace(candidate.clone()))?,
-        ))
+        );
+        if self.is_denied(&resolved) {
+            return Err(WorkspaceError::Denied(resolved));
+        }
+        Ok(resolved)
     }
 
     pub fn read_text_bounded(
@@ -125,9 +172,95 @@ impl Workspace {
     }
 }
 
+/// Accepts only simple relative paths so that a boundary entry can never widen
+/// the workspace or name something outside it.
+pub fn validate_boundary_entry(entry: &str) -> Result<PathBuf, WorkspaceError> {
+    let entry = entry.trim();
+    let path = Path::new(entry);
+    if entry.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(WorkspaceError::InvalidBoundary(entry.to_string()));
+    }
+    Ok(path.to_path_buf())
+}
+
+/// Parses a comma-separated boundary list; an empty string means "no exclusions".
+pub fn parse_deny_paths(input: &str) -> Result<Vec<String>, WorkspaceError> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            validate_boundary_entry(entry)?;
+            Ok(entry.to_string())
+        })
+        .collect()
+}
+
+/// Boundary list in effect for a server: an explicit list wins, otherwise the
+/// environment override, otherwise the conservative default.
+pub fn effective_deny_paths(explicit: Option<&str>) -> Result<Vec<String>, WorkspaceError> {
+    match explicit {
+        Some(value) => parse_deny_paths(value),
+        None => match std::env::var("WEB_HARNESS_DENY_PATHS") {
+            Ok(value) => parse_deny_paths(&value),
+            Err(_) => Ok(DEFAULT_DENY_PATHS.iter().map(|s| s.to_string()).collect()),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boundary_excludes_default_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".git/config"), "x").unwrap();
+        fs::write(dir.path().join("src.txt"), "ok").unwrap();
+        let denied: Vec<String> = DEFAULT_DENY_PATHS.iter().map(|s| s.to_string()).collect();
+        let workspace = Workspace::with_denied(dir.path(), &denied).unwrap();
+
+        assert!(workspace.resolve(".git/config").is_err());
+        assert!(workspace.resolve("src.txt").is_ok());
+        assert_eq!(workspace.denied(), vec![".git", "target", "node_modules"]);
+    }
+
+    #[test]
+    fn boundary_blocks_writes_into_excluded_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("target")).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let workspace = Workspace::with_denied(dir.path(), &["target".to_string()]).unwrap();
+
+        assert!(workspace.resolve_for_write("target/out.bin").is_err());
+        assert!(workspace.resolve_for_write("src/out.txt").is_ok());
+    }
+
+    #[test]
+    fn boundary_entries_cannot_widen_the_workspace() {
+        assert!(validate_boundary_entry("../escape").is_err());
+        assert!(validate_boundary_entry("/etc").is_err());
+        assert!(validate_boundary_entry("").is_err());
+        assert!(validate_boundary_entry("nested/dir").is_ok());
+        assert!(parse_deny_paths("").unwrap().is_empty());
+        assert_eq!(
+            parse_deny_paths(".git, target").unwrap(),
+            vec![".git".to_string(), "target".to_string()]
+        );
+    }
+
+    #[test]
+    fn workspace_info_reports_the_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::with_denied(dir.path(), &["target".to_string()]).unwrap();
+        assert_eq!(workspace.info().denied, vec!["target".to_string()]);
+    }
 
     #[test]
     fn resolves_paths_inside_workspace() {

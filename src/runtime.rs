@@ -47,6 +47,8 @@ pub struct UserStatus {
     pub connected: bool,
     pub stale_state_recovered: bool,
     pub workspace: Option<String>,
+    /// Workspace-relative paths excluded from the boundary in effect.
+    pub denied_paths: Vec<String>,
     pub tunnel_pid: Option<u32>,
     pub sandbox: String,
     pub message: String,
@@ -65,6 +67,7 @@ impl UserStatus {
             connected: false,
             stale_state_recovered,
             workspace,
+            denied_paths: Vec::new(),
             tunnel_pid: None,
             sandbox: sandbox::status().into(),
             message: message.into(),
@@ -78,6 +81,7 @@ impl UserStatus {
             connected: true,
             stale_state_recovered: false,
             workspace: Some(state.workspace),
+            denied_paths: Vec::new(),
             tunnel_pid: Some(state.tunnel_pid),
             sandbox: sandbox::status().into(),
             message: message.into(),
@@ -106,13 +110,16 @@ pub enum RuntimeError {
 pub fn connect(
     workspace_override: Option<&Path>,
     tunnel_override: Option<&str>,
+    deny_paths: Option<&str>,
 ) -> Result<UserStatus, RuntimeError> {
     let mut user_config = config::load_optional()?.ok_or(RuntimeError::NotConfigured)?;
     let selected_workspace = match workspace_override {
         Some(workspace) => workspace.to_path_buf(),
         None => std::env::current_dir()?,
     };
-    let selected_workspace = Workspace::new(selected_workspace)
+    let denied = crate::workspace::effective_deny_paths(deny_paths)
+        .map_err(|error| RuntimeError::InvalidWorkspace(error.to_string()))?;
+    let selected_workspace = Workspace::with_denied(selected_workspace, &denied)
         .map_err(|error| RuntimeError::InvalidWorkspace(error.to_string()))?;
     user_config.workspace = selected_workspace.root().display().to_string();
     if let Some(command) = tunnel_override {
@@ -139,7 +146,9 @@ pub fn connect(
         "serve",
         "--stdio",
         "--workspace",
-        workspace.root().display().to_string()
+        workspace.root().display().to_string(),
+        "--deny-paths",
+        workspace.denied().join(",")
     ]);
 
     let shell_env = onboarding::managed_shell_env()
@@ -153,7 +162,8 @@ pub fn connect(
         let tunnel_client = tunnel_client
             .as_ref()
             .ok_or(RuntimeError::TunnelClientUnavailable)?;
-        let mcp_command = build_stdio_mcp_command(&current_exe, workspace.root());
+        let mcp_command =
+            build_stdio_mcp_command(&current_exe, workspace.root(), &workspace.denied());
         let mut command = Command::new(tunnel_client);
         command
             .arg("run")
@@ -206,18 +216,32 @@ pub fn connect(
             .as_secs(),
     };
     write_state(&state)?;
-    Ok(UserStatus::from_state(
-        Some(user_config),
-        state,
-        "connected",
-    ))
+    let mut status = UserStatus::from_state(Some(user_config), state, "connected");
+    status.denied_paths = workspace.denied();
+    Ok(status)
 }
 
 pub fn status() -> Result<UserStatus, RuntimeError> {
     let user_config = config::load_optional()?;
     let configured = user_config.is_some();
+    let denied = match user_config.as_ref() {
+        Some(config) => {
+            let workspace = Path::new(&config.workspace);
+            let paths = if workspace.is_dir() {
+                crate::workspace::effective_deny_paths(None)
+                    .ok()
+                    .and_then(|denied| Workspace::with_denied(workspace, &denied).ok())
+                    .map(|value| value.denied())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            paths
+        }
+        None => Vec::new(),
+    };
     let Some(state) = read_state()? else {
-        return Ok(UserStatus::disconnected(
+        let mut status = UserStatus::disconnected(
             configured,
             false,
             user_config.as_ref().map(|value| value.workspace.clone()),
@@ -226,7 +250,9 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
             } else {
                 "not configured"
             },
-        ));
+        );
+        status.denied_paths = denied;
+        return Ok(status);
     };
     if !process::process_alive(state.tunnel_pid) {
         remove_state()?;
@@ -264,19 +290,46 @@ pub fn disconnect() -> Result<UserStatus, RuntimeError> {
 }
 
 pub fn format_status(status: &UserStatus) -> String {
+    let boundary = if status.denied_paths.is_empty() {
+        "none".to_string()
+    } else {
+        status.denied_paths.join(", ")
+    };
     format!(
-        "web-harness\n  status: {}\n  workspace: {}\n  tunnel: {}\n  sandbox: {}\n  {}",
+        "web-harness\n  status: {}\n  workspace: {}\n  excluded: {}\n  tunnel: {}\n  sandbox: {}\n  {}",
         if status.connected {
             "connected"
         } else {
             "disconnected"
         },
         status.workspace.as_deref().unwrap_or("-"),
+        boundary,
         status
             .tunnel_pid
             .map(|pid| format!("running (pid {pid})"))
             .unwrap_or_else(|| "stopped".into()),
         status.sandbox,
+        status.message
+    )
+}
+
+/// Multi-line confirmation printed by `connect`, so the boundary in effect is
+/// explicit before any remote agent can reach the workspace.
+pub fn format_connect_confirmation(status: &UserStatus) -> String {
+    let boundary = if status.denied_paths.is_empty() {
+        "none".to_string()
+    } else {
+        status.denied_paths.join(", ")
+    };
+    format!(
+        "web-harness\n  workspace: {}\n  excluded: {}\n  sandbox: {}\n  tunnel: {}\n  {}",
+        status.workspace.as_deref().unwrap_or("-"),
+        boundary,
+        status.sandbox,
+        status
+            .tunnel_pid
+            .map(|pid| format!("running (pid {pid})"))
+            .unwrap_or_else(|| "stopped".into()),
         status.message
     )
 }
@@ -312,11 +365,12 @@ fn remove_state() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn build_stdio_mcp_command(executable: &Path, workspace: &Path) -> String {
+fn build_stdio_mcp_command(executable: &Path, workspace: &Path, denied: &[String]) -> String {
     format!(
-        "{} serve --stdio --workspace {}",
+        "{} serve --stdio --workspace {} --deny-paths {}",
         quote_command_arg(executable),
-        quote_command_arg(workspace)
+        quote_command_arg(workspace),
+        quote_command_arg(Path::new(&denied.join(",")))
     )
 }
 
@@ -358,12 +412,15 @@ mod tests {
 
     #[test]
     fn stdio_command_quotes_paths() {
+        let denied = vec![".git".to_string(), "target".to_string()];
         let command = build_stdio_mcp_command(
             Path::new("/tmp/web harness"),
             Path::new("/tmp/project with spaces"),
+            &denied,
         );
         assert!(command.contains("serve --stdio --workspace"));
         assert!(command.contains("web harness"));
         assert!(command.contains("project with spaces"));
+        assert!(command.contains("--deny-paths '.git,target'"));
     }
 }

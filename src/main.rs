@@ -38,6 +38,12 @@ enum Command {
         stdio: bool,
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
+        #[arg(
+            long,
+            value_name = "LIST",
+            help = "Comma-separated workspace-relative paths to exclude (default: .git,target,node_modules)"
+        )]
+        deny_paths: Option<String>,
     },
     Doctor {
         #[arg(long, value_name = "PATH", default_value = ".")]
@@ -84,6 +90,12 @@ enum Command {
         workspace: Option<PathBuf>,
         #[arg(long)]
         tunnel_command_json: Option<String>,
+        #[arg(
+            long,
+            value_name = "LIST",
+            help = "Comma-separated workspace-relative paths to exclude (default: .git,target,node_modules)"
+        )]
+        deny_paths: Option<String>,
     },
     Status,
     Disconnect,
@@ -148,11 +160,16 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve { stdio, workspace } => {
+        Command::Serve {
+            stdio,
+            workspace,
+            deny_paths,
+        } => {
             if !stdio {
                 return Err("only --stdio transport is supported".into());
             }
-            mcp::serve_stdio(workspace::Workspace::new(workspace)?)?;
+            let denied = workspace::effective_deny_paths(deny_paths.as_deref())?;
+            mcp::serve_stdio(workspace::Workspace::with_denied(workspace, &denied)?)?;
         }
         Command::Doctor { workspace } => {
             let workspace = workspace::Workspace::new(workspace)?;
@@ -192,9 +209,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Connect {
             workspace,
             tunnel_command_json,
+            deny_paths,
         } => {
-            let status = runtime::connect(workspace.as_deref(), tunnel_command_json.as_deref())?;
-            println!("{}", runtime::format_status(&status));
+            let status = runtime::connect(
+                workspace.as_deref(),
+                tunnel_command_json.as_deref(),
+                deny_paths.as_deref(),
+            )?;
+            println!("{}", runtime::format_connect_confirmation(&status));
         }
         Command::Status => {
             let status = runtime::status()?;
