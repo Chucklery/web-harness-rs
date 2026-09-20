@@ -77,7 +77,7 @@ pub fn config_path() -> Result<PathBuf, ConfigError> {
         return Ok(PathBuf::from(root).join("web-harness/config.json"));
     }
     let home = user_home_dir().ok_or(ConfigError::MissingHome)?;
-    Ok(PathBuf::from(home).join(".config/web-harness/config.json"))
+    Ok(home.join(".config/web-harness/config.json"))
 }
 
 pub fn state_dir() -> Result<PathBuf, ConfigError> {
@@ -89,7 +89,7 @@ pub fn state_dir() -> Result<PathBuf, ConfigError> {
         return Ok(PathBuf::from(root).join("web-harness/state"));
     }
     let home = user_home_dir().ok_or(ConfigError::MissingHome)?;
-    Ok(PathBuf::from(home).join(".local/state/web-harness"))
+    Ok(home.join(".local/state/web-harness"))
 }
 
 pub fn user_home_dir() -> Option<PathBuf> {

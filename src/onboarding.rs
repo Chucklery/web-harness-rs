@@ -267,7 +267,7 @@ fn persist_credentials_at(
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let existing = if path.exists() {
-        fs::read_to_string(&path)?
+        fs::read_to_string(path)?
     } else {
         String::new()
     };
@@ -291,7 +291,7 @@ fn persist_credentials_at(
 
     let block = credential_block(tunnel_id, api_key);
     let updated = replace_managed_block(&existing, &block);
-    atomic_write_private(&path, updated.as_bytes())?;
+    atomic_write_private(path, updated.as_bytes())?;
     Ok(backup)
 }
 
@@ -524,10 +524,10 @@ fn is_usable_client(candidate: &Path, windows: bool) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return candidate
+        candidate
             .metadata()
             .map(|meta| meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
