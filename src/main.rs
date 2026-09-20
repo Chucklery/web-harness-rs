@@ -4,6 +4,7 @@ use std::path::PathBuf;
 mod atomic_file;
 mod command_policy;
 mod config;
+mod env;
 mod exec;
 mod git;
 mod jobs;

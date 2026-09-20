@@ -1,3 +1,4 @@
+use crate::env;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
@@ -228,19 +229,16 @@ fn run_owned(workspace: &Workspace, args: &[String]) -> Result<GitResult, GitErr
 }
 
 fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workspace.root())
-        .env_clear()
-        .envs(safe_git_environment())
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                GitError::Unavailable
-            } else {
-                GitError::Failed(error.to_string())
-            }
-        })?;
+    let mut command = Command::new("git");
+    command.args(args).current_dir(workspace.root());
+    env::apply(&mut command);
+    let output = command.output().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            GitError::Unavailable
+        } else {
+            GitError::Failed(error.to_string())
+        }
+    })?;
     if !output.status.success() {
         return Err(GitError::Failed(redact::text(
             String::from_utf8_lossy(&output.stderr).trim(),
@@ -260,33 +258,6 @@ fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
         stderr: redact::text(&String::from_utf8_lossy(&stderr)),
         truncated,
     })
-}
-
-fn safe_git_environment() -> Vec<(String, String)> {
-    const KEYS: &[&str] = &[
-        "PATH",
-        "HOME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "TERM",
-        "USER",
-        "LOGNAME",
-        "SSH_AUTH_SOCK",
-    ];
-    let mut result = Vec::new();
-    for key in KEYS {
-        if let Ok(value) = std::env::var(key) {
-            result.push((key.to_string(), value));
-        }
-    }
-    for (key, value) in std::env::vars() {
-        if key.starts_with("LC_") && !redact::sensitive_env_key(&key) {
-            result.push((key, value));
-        }
-    }
-    result
 }
 
 #[cfg(test)]

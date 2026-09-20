@@ -1,4 +1,5 @@
 use crate::command_policy;
+use crate::env;
 use crate::process;
 use crate::redact;
 use crate::sandbox;
@@ -371,11 +372,10 @@ fn spawn(
     command
         .args(&argv[1..])
         .current_dir(cwd)
-        .env_clear()
         .stdin(Stdio::null())
         .stdout(artifacts.stdout.file.try_clone()?)
         .stderr(artifacts.stderr.file.try_clone()?);
-    inherit_safe_environment(&mut command);
+    env::apply(&mut command);
     if sandboxed {
         command.env(sandbox::SANDBOX_ENV_MARKER, "seatbelt");
     }
@@ -383,33 +383,6 @@ fn spawn(
     // error is reported like any other launch failure.
     let _ = process::detach_into_own_group(&mut command);
     command.spawn()
-}
-
-fn inherit_safe_environment(command: &mut Command) {
-    const SAFE: &[&str] = &[
-        "PATH",
-        "HOME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "TERM",
-        "SHELL",
-        "USER",
-        "LOGNAME",
-        "SSH_AUTH_SOCK",
-    ];
-    for key in SAFE {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    for (key, value) in std::env::vars_os() {
-        let key_text = key.to_string_lossy();
-        if key_text.starts_with("LC_") && !redact::sensitive_env_key(&key_text) {
-            command.env(key, value);
-        }
-    }
 }
 
 fn terminate(child: &mut Child) -> Result<(), std::io::Error> {
@@ -474,13 +447,7 @@ mod tests {
         let ws = Workspace::new(&workspace_dir).unwrap();
         let manager = JobManager::new();
         let error = manager
-            .run_foreground(
-                &ws,
-                &["pwd".into()],
-                Some("../"),
-                Some(2_000),
-                false,
-            )
+            .run_foreground(&ws, &["pwd".into()], Some("../"), Some(2_000), false)
             .unwrap_err();
         assert!(matches!(
             error,
@@ -513,12 +480,7 @@ mod tests {
         let ws = Workspace::new(dir.path()).unwrap();
         let mut manager = JobManager::new();
         let started = manager
-            .start(
-                &ws,
-                &["printf".into(), "done".into()],
-                None,
-                false,
-            )
+            .start(&ws, &["printf".into(), "done".into()], None, false)
             .unwrap();
         for _ in 0..100 {
             if manager.poll(&started.id).unwrap().state == "exited" {
@@ -541,12 +503,7 @@ mod tests {
 
         for index in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
             let started = manager
-                .start(
-                    &ws,
-                    &["printf".into(), "done".into()],
-                    None,
-                    false,
-                )
+                .start(&ws, &["printf".into(), "done".into()], None, false)
                 .unwrap();
             let id = started.id.clone();
             if index == 0 {
