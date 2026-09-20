@@ -1,5 +1,6 @@
 pub(crate) mod file;
 pub(crate) mod registry;
+pub(crate) mod search;
 #[path = "runtime/trait.rs"]
 pub(crate) mod tool_trait;
 

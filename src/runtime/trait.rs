@@ -7,6 +7,7 @@ pub enum RuntimeErrorKind {
     InvalidArguments,
     Workspace,
     LimitExceeded,
+    Execution,
 }
 
 #[derive(Debug, Error)]

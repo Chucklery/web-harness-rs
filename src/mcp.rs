@@ -5,7 +5,6 @@ use crate::patch;
 use crate::permission::{ExecAuthorization, PermissionEngine};
 use crate::runtime::{registry::RuntimeRegistry, RuntimeErrorKind, RuntimeToolError};
 use crate::sandbox::SandboxBackend;
-use crate::search;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -285,6 +284,7 @@ fn runtime_error(error: RuntimeToolError) -> Value {
         RuntimeErrorKind::InvalidArguments => -32602,
         RuntimeErrorKind::Workspace => -32001,
         RuntimeErrorKind::LimitExceeded => -32002,
+        RuntimeErrorKind::Execution => -32010,
     };
     json!({"code": code, "message": error.message()})
 }
@@ -435,69 +435,6 @@ fn call_tool(
         "workspace_info" => Ok(json!({
             "content": [{"type": "text", "text": serde_json::to_string(&workspace.info()).unwrap()}]
         })),
-        "search" => {
-            let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let query = arguments.get("query").and_then(Value::as_str);
-            let queries = arguments.get("queries").and_then(Value::as_array);
-            if query.is_some() == queries.is_some() {
-                return Err(json!({
-                    "code": -32602,
-                    "message": "exactly one of arguments.query or arguments.queries is required"
-                }));
-            }
-            let max_results = arguments
-                .get("max_results")
-                .and_then(Value::as_u64)
-                .unwrap_or(100) as usize;
-            if !(1..=200).contains(&max_results) {
-                return Err(json!({"code": -32602, "message": "max_results must be 1..=200"}));
-            }
-            if let Some(query) = query {
-                if query.is_empty() || query.len() > 1024 {
-                    return Err(json!({"code": -32602, "message": "query must be 1..=1024 bytes"}));
-                }
-                let matches = search::content_search(workspace, query, max_results)
-                    .map_err(|error| json!({"code": -32010, "message": error.to_string()}))?;
-                return Ok(
-                    json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"matches": matches})).unwrap()}]}),
-                );
-            }
-
-            let queries = queries.unwrap();
-            if queries.is_empty() || queries.len() > 8 {
-                return Err(json!({"code": -32602, "message": "queries must contain 1..=8 items"}));
-            }
-            let mut parsed = Vec::with_capacity(queries.len());
-            for value in queries {
-                let query = value.as_str().ok_or_else(
-                    || json!({"code": -32602, "message": "queries items must be strings"}),
-                )?;
-                if query.is_empty() || query.len() > 1024 {
-                    return Err(
-                        json!({"code": -32602, "message": "each query must be 1..=1024 bytes"}),
-                    );
-                }
-                parsed.push(query);
-            }
-
-            let mut remaining_results = max_results;
-            let mut results = Vec::with_capacity(parsed.len());
-            for (index, query) in parsed.iter().enumerate() {
-                let remaining_queries = parsed.len() - index;
-                let per_query_limit = remaining_results.div_ceil(remaining_queries);
-                let matches = if per_query_limit == 0 {
-                    Vec::new()
-                } else {
-                    search::content_search(workspace, query, per_query_limit)
-                        .map_err(|error| json!({"code": -32010, "message": error.to_string()}))?
-                };
-                remaining_results = remaining_results.saturating_sub(matches.len());
-                results.push(json!({"query": query, "matches": matches}));
-            }
-            Ok(
-                json!({"content": [{"type": "text", "text": serde_json::to_string(&json!({"results": results})).unwrap()}]}),
-            )
-        }
         "workspace_instructions" => {
             let path = params
                 .get("arguments")

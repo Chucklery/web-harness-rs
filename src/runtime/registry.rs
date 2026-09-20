@@ -1,4 +1,5 @@
 use super::file::FileRuntime;
+use super::search::SearchRuntime;
 use super::tool_trait::{RuntimeTool, RuntimeToolError};
 use crate::workspace::Workspace;
 use serde_json::Value;
@@ -38,6 +39,7 @@ impl Default for RuntimeRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
         registry.register(FileRuntime);
+        registry.register(SearchRuntime);
         registry
     }
 }
@@ -50,6 +52,6 @@ mod tests {
     fn default_registry_contains_file_runtime() {
         let registry = RuntimeRegistry::default();
         assert!(registry.tools.contains_key("read_files"));
-        assert!(!registry.tools.contains_key("search"));
+        assert!(registry.tools.contains_key("search"));
     }
 }
