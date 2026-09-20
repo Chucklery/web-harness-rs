@@ -13,6 +13,7 @@ mod mcp;
 mod onboarding;
 mod patch;
 mod permission;
+mod process;
 mod redact;
 mod runtime;
 mod sandbox;

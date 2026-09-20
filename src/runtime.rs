@@ -18,6 +18,7 @@ pub(crate) use tool_trait::{RuntimeErrorKind, RuntimeToolError};
 
 use crate::config::{self, UserConfig};
 use crate::onboarding;
+use crate::process;
 use crate::sandbox;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,12 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+/// How long the tunnel process is given to prove that it is still running after
+/// it has been spawned.
+const TUNNEL_STARTUP_GRACE: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeState {
@@ -47,6 +52,39 @@ pub struct UserStatus {
     pub message: String,
 }
 
+impl UserStatus {
+    /// The single construction point for a status that carries no live tunnel.
+    fn disconnected(
+        configured: bool,
+        stale_state_recovered: bool,
+        workspace: Option<String>,
+        message: &str,
+    ) -> Self {
+        Self {
+            configured,
+            connected: false,
+            stale_state_recovered,
+            workspace,
+            tunnel_pid: None,
+            sandbox: sandbox::status().into(),
+            message: message.into(),
+        }
+    }
+
+    /// The single construction point for a status backed by a tunnel process.
+    fn from_state(user_config: Option<UserConfig>, state: RuntimeState, message: &str) -> Self {
+        Self {
+            configured: user_config.is_some(),
+            connected: true,
+            stale_state_recovered: false,
+            workspace: Some(state.workspace),
+            tunnel_pid: Some(state.tunnel_pid),
+            sandbox: sandbox::status().into(),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
@@ -55,6 +93,8 @@ pub enum RuntimeError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Process(#[from] process::ProcessError),
     #[error("web-harness is not configured; run setup first")]
     NotConfigured,
     #[error("OpenAI tunnel-client was not found; reinstall web-harness or set WEB_HARNESS_TUNNEL_CLIENT_BIN")]
@@ -80,11 +120,10 @@ pub fn connect(
     }
 
     if let Some(existing) = read_state()? {
-        if process_alive(existing.tunnel_pid) {
-            return Ok(status_from_state(
+        if process::process_alive(existing.tunnel_pid) {
+            return Ok(UserStatus::from_state(
                 Some(user_config),
                 existing,
-                false,
                 "already connected",
             ));
         }
@@ -140,29 +179,19 @@ pub fn connect(
             }
         }
     }
-    if let Some(tunnel_id) = shell_env.tunnel_id {
-        command.env("CONTROL_PLANE_TUNNEL_ID", tunnel_id);
-    }
-    if let Some(api_key) = shell_env.api_key {
-        command.env("CONTROL_PLANE_API_KEY", api_key);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+    for (key, value) in [
+        ("CONTROL_PLANE_TUNNEL_ID", shell_env.tunnel_id),
+        ("CONTROL_PLANE_API_KEY", shell_env.api_key),
+    ] {
+        if let Some(value) = value {
+            command.env(key, value);
         }
     }
+    process::detach_into_own_group(&mut command)?;
     let child = command.spawn()?;
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    if !process_alive(child.id()) {
-        return Err(RuntimeError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+    std::thread::sleep(TUNNEL_STARTUP_GRACE);
+    if !process::process_alive(child.id()) {
+        return Err(RuntimeError::Io(std::io::Error::other(
             "tunnel process exited during startup; use tunnel doctor/accept for diagnostics",
         )));
     }
@@ -177,72 +206,61 @@ pub fn connect(
             .as_secs(),
     };
     write_state(&state)?;
-    Ok(status_from_state(
+    Ok(UserStatus::from_state(
         Some(user_config),
         state,
-        false,
         "connected",
     ))
 }
 
 pub fn status() -> Result<UserStatus, RuntimeError> {
     let user_config = config::load_optional()?;
+    let configured = user_config.is_some();
     let Some(state) = read_state()? else {
-        return Ok(UserStatus {
-            configured: user_config.is_some(),
-            connected: false,
-            stale_state_recovered: false,
-            workspace: user_config.as_ref().map(|value| value.workspace.clone()),
-            tunnel_pid: None,
-            sandbox: sandbox::status().into(),
-            message: if user_config.is_some() {
-                "configured but disconnected".into()
+        return Ok(UserStatus::disconnected(
+            configured,
+            false,
+            user_config.as_ref().map(|value| value.workspace.clone()),
+            if configured {
+                "configured but disconnected"
             } else {
-                "not configured".into()
+                "not configured"
             },
-        });
+        ));
     };
-    if !process_alive(state.tunnel_pid) {
+    if !process::process_alive(state.tunnel_pid) {
         remove_state()?;
-        return Ok(UserStatus {
-            configured: user_config.is_some(),
-            connected: false,
-            stale_state_recovered: true,
-            workspace: Some(state.workspace),
-            tunnel_pid: None,
-            sandbox: sandbox::status().into(),
-            message: "stale connection state was cleaned up".into(),
-        });
+        return Ok(UserStatus::disconnected(
+            configured,
+            true,
+            Some(state.workspace),
+            "stale connection state was cleaned up",
+        ));
     }
-    Ok(status_from_state(user_config, state, false, "connected"))
+    Ok(UserStatus::from_state(user_config, state, "connected"))
 }
 
 pub fn disconnect() -> Result<UserStatus, RuntimeError> {
     let user_config = config::load_optional()?;
-    if let Some(state) = read_state()? {
-        if process_alive(state.tunnel_pid) {
-            terminate_process_group(state.tunnel_pid)?;
-        }
-        remove_state()?;
-        return Ok(UserStatus {
-            configured: user_config.is_some(),
-            connected: false,
-            stale_state_recovered: false,
-            workspace: Some(state.workspace),
-            tunnel_pid: None,
-            sandbox: sandbox::status().into(),
-            message: "disconnected".into(),
-        });
+    let configured = user_config.is_some();
+    let Some(state) = read_state()? else {
+        return Ok(UserStatus::disconnected(
+            configured,
+            false,
+            user_config.as_ref().map(|value| value.workspace.clone()),
+            "already disconnected",
+        ));
+    };
+    if process::process_alive(state.tunnel_pid) {
+        process::terminate_process_group(state.tunnel_pid)?;
     }
-    Ok(UserStatus {
-        configured: user_config.is_some(),
-        connected: false,
-        stale_state_recovered: false,
-        workspace: user_config.as_ref().map(|value| value.workspace.clone()),
-        tunnel_pid: None,
-        sandbox: sandbox::status().into(),
-        message: "already disconnected".into(),
-    })
+    remove_state()?;
+    Ok(UserStatus::disconnected(
+        configured,
+        false,
+        Some(state.workspace),
+        "disconnected",
+    ))
 }
 
 pub fn format_status(status: &UserStatus) -> String {
@@ -261,23 +279,6 @@ pub fn format_status(status: &UserStatus) -> String {
         status.sandbox,
         status.message
     )
-}
-
-fn status_from_state(
-    user_config: Option<UserConfig>,
-    state: RuntimeState,
-    stale: bool,
-    message: &str,
-) -> UserStatus {
-    UserStatus {
-        configured: user_config.is_some(),
-        connected: true,
-        stale_state_recovered: stale,
-        workspace: Some(state.workspace),
-        tunnel_pid: Some(state.tunnel_pid),
-        sandbox: sandbox::status().into(),
-        message: message.into(),
-    }
 }
 
 fn state_path() -> Result<PathBuf, RuntimeError> {
@@ -331,86 +332,28 @@ fn quote_command_arg(path: &Path) -> String {
     }
 }
 
-fn process_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    unsafe {
-        return libc::kill(pid as i32, 0) == 0;
-    }
-    #[cfg(windows)]
-    {
-        let filter = format!("PID eq {pid}");
-        let Ok(output) = Command::new("tasklist")
-            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
-            .output()
-        else {
-            return false;
-        };
-        if !output.status.success() {
-            return false;
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        text.contains(&format!(",\"{pid}\","))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
-fn terminate_process_group(pid: u32) -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    unsafe {
-        if libc::kill(-(pid as i32), libc::SIGTERM) == -1 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        if process_alive(pid) {
-            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-        return Ok(());
-    }
-    #[cfg(windows)]
-    {
-        let status = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()?;
-        if status.success() || !process_alive(pid) {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(format!(
-                "taskkill failed for tunnel pid {pid}"
-            )))
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn disconnected_status(workspace: Option<&str>, message: &str) -> UserStatus {
+        UserStatus::disconnected(true, false, workspace.map(ToOwned::to_owned), message)
+    }
+
     #[test]
     fn status_format_is_human_readable() {
-        let value = UserStatus {
-            configured: true,
-            connected: false,
-            stale_state_recovered: false,
-            workspace: Some("/tmp/project".into()),
-            tunnel_pid: None,
-            sandbox: "test".into(),
-            message: "disconnected".into(),
-        };
+        let value = disconnected_status(Some("/tmp/project"), "disconnected");
         let output = format_status(&value);
         assert!(output.contains("workspace: /tmp/project"));
         assert!(output.contains("status: disconnected"));
+    }
+
+    #[test]
+    fn disconnected_status_reports_the_sandbox_backend() {
+        let value = disconnected_status(None, "not configured");
+        assert!(!value.connected);
+        assert!(value.workspace.is_none());
+        assert_eq!(value.sandbox, sandbox::status());
     }
 
     #[test]
