@@ -279,7 +279,8 @@ fn runtime_content(value: Value) -> Value {
 }
 
 fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
-    let code = match error.kind() {
+    let kind = error.kind();
+    let code = match kind {
         RuntimeErrorKind::InvalidArguments => -32602,
         RuntimeErrorKind::Workspace => match tool {
             "workspace_instructions" => -32011,
@@ -303,8 +304,21 @@ fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
             "patch" => -32022,
             _ => -32033,
         },
+        // Distinct from Execution so a client can tell "the environment cannot
+        // serve this" from "this request failed", without parsing prose.
+        RuntimeErrorKind::Dependency => match tool {
+            "search" => -32012,
+            "git" => -32042,
+            _ => -32012,
+        },
     };
-    json!({"code": code, "message": error.message()})
+    let mut payload = json!({"code": code, "message": error.message()});
+    if kind == RuntimeErrorKind::Dependency {
+        payload["reason_code"] = json!("dependency_unavailable");
+        payload["failure_stage"] = json!("dependency_resolution");
+        payload["retryable"] = json!(false);
+    }
+    payload
 }
 
 fn call_tool(
@@ -393,5 +407,44 @@ fn call_tool(
             call_tool(&forwarded, workspace, jobs, permissions, runtime)
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_errors_are_machine_readable() {
+        let payload = runtime_error(
+            "search",
+            RuntimeToolError::new(RuntimeErrorKind::Dependency, "ripgrep is missing"),
+        );
+        assert_eq!(payload["code"], -32012);
+        assert_eq!(payload["reason_code"], "dependency_unavailable");
+        assert_eq!(payload["failure_stage"], "dependency_resolution");
+        assert_eq!(payload["retryable"], false);
+    }
+
+    #[test]
+    fn dependency_errors_keep_per_tool_codes() {
+        assert_eq!(
+            runtime_error(
+                "git",
+                RuntimeToolError::new(RuntimeErrorKind::Dependency, "git is not available"),
+            )["code"],
+            -32042
+        );
+    }
+
+    #[test]
+    fn execution_errors_stay_distinct_from_dependency_errors() {
+        let payload = runtime_error(
+            "search",
+            RuntimeToolError::new(RuntimeErrorKind::Execution, "search failed"),
+        );
+        assert_eq!(payload["code"], -32010);
+        assert!(payload.get("reason_code").is_none());
+        assert!(payload.get("retryable").is_none());
     }
 }

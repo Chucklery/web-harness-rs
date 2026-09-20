@@ -1,7 +1,7 @@
 use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::permission::Capability;
-use crate::search;
+use crate::search::{self, SearchError};
 use serde_json::{json, Value};
 
 const MAX_QUERY_BYTES: usize = 1024;
@@ -47,9 +47,8 @@ impl RuntimeTool for SearchRuntime {
 
         if let Some(query) = query {
             validate_query(query)?;
-            let matches = search::content_search(context.workspace(), query, max_results).map_err(
-                |error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string()),
-            )?;
+            let matches = search::content_search(context.workspace(), query, max_results)
+                .map_err(search_error)?;
             return Ok(json!({"matches": matches}));
         }
 
@@ -81,9 +80,8 @@ impl RuntimeTool for SearchRuntime {
             let matches = if per_query_limit == 0 {
                 Vec::new()
             } else {
-                search::content_search(context.workspace(), query, per_query_limit).map_err(
-                    |error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string()),
-                )?
+                search::content_search(context.workspace(), query, per_query_limit)
+                    .map_err(search_error)?
             };
             remaining_results = remaining_results.saturating_sub(matches.len());
             results.push(json!({"query": query, "matches": matches}));
@@ -91,6 +89,16 @@ impl RuntimeTool for SearchRuntime {
 
         Ok(json!({"results": results}))
     }
+}
+
+/// A missing ripgrep is a dependency problem, not a failed search: the request
+/// was well formed and reissuing it would fail identically.
+fn search_error(error: SearchError) -> RuntimeToolError {
+    let kind = match error {
+        SearchError::RipgrepUnavailable => RuntimeErrorKind::Dependency,
+        SearchError::Failed(_) => RuntimeErrorKind::Execution,
+    };
+    RuntimeToolError::new(kind, error.to_string())
 }
 
 fn validate_query(query: &str) -> Result<(), RuntimeToolError> {
@@ -121,6 +129,18 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn missing_ripgrep_is_reported_as_a_dependency_problem() {
+        let error = search_error(SearchError::RipgrepUnavailable);
+        assert_eq!(error.kind(), RuntimeErrorKind::Dependency);
+    }
+
+    #[test]
+    fn failed_searches_stay_execution_errors() {
+        let error = search_error(SearchError::Failed("boom".to_string()));
+        assert_eq!(error.kind(), RuntimeErrorKind::Execution);
     }
 
     #[test]

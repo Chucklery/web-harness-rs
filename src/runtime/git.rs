@@ -175,12 +175,16 @@ fn parse_pathspec(arguments: &Value) -> Result<Vec<String>, RuntimeToolError> {
 }
 
 fn git_error(error: GitError) -> RuntimeToolError {
-    match error {
-        GitError::Invalid(message) => {
-            RuntimeToolError::new(RuntimeErrorKind::InvalidArguments, message)
-        }
-        other => RuntimeToolError::new(RuntimeErrorKind::Execution, other.to_string()),
-    }
+    let kind = match &error {
+        GitError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
+        GitError::Unavailable => RuntimeErrorKind::Dependency,
+        GitError::Failed(_) => RuntimeErrorKind::Execution,
+    };
+    let message = match error {
+        GitError::Invalid(message) => message,
+        other => other.to_string(),
+    };
+    RuntimeToolError::new(kind, message)
 }
 
 fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolError {
@@ -203,5 +207,17 @@ mod tests {
     fn malformed_pathspec_is_rejected() {
         let error = parse_pathspec(&json!({"pathspec": ["ok", 3]})).unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn missing_git_is_reported_as_a_dependency_problem() {
+        let error = git_error(GitError::Unavailable);
+        assert_eq!(error.kind(), RuntimeErrorKind::Dependency);
+    }
+
+    #[test]
+    fn failed_git_commands_stay_execution_errors() {
+        let error = git_error(GitError::Failed("boom".to_string()));
+        assert_eq!(error.kind(), RuntimeErrorKind::Execution);
     }
 }

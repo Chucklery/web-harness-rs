@@ -9,6 +9,12 @@ pub enum RuntimeErrorKind {
     LimitExceeded,
     Execution,
     Permission,
+    /// A runtime dependency the tool shells out to is missing or unusable.
+    ///
+    /// Kept distinct from [`RuntimeErrorKind::Execution`] because the caller
+    /// cannot fix it by changing the request: retrying is pointless, and an
+    /// agent that cannot tell the two apart will loop on an unfixable call.
+    Dependency,
 }
 
 #[derive(Debug, Error)]
