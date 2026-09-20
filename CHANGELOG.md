@@ -2,6 +2,24 @@
 
 All notable changes will be documented here.
 
+## 0.3.3 - 2026-09-20
+
+### Fixed
+
+- Fixed the macOS sandbox profile blocking `/dev/null`, which caused Git and other developer tools run through `exec` to fail with `Operation not permitted`.
+- Prevented web-harness from applying a nested macOS Seatbelt sandbox when execution is already inside the web-harness sandbox, which previously broke `cargo test` run through `exec` with `sandbox_apply: Operation not permitted`.
+- Fixed approval tickets being consumed after an authorization mismatch; tickets are now consumed only by a successful authorization or by expiry, so a mismatched request no longer invalidates a still-valid approval.
+- Search now returns an actionable dependency error naming ripgrep and how to install it, instead of an opaque `ripgrep is not available` message.
+
+### Changed
+
+- Homebrew installations now declare ripgrep as a formula dependency, so `search` works immediately after `brew install`.
+
+### Documentation
+
+- Clarified that the `search` runtime requires system ripgrep, that Homebrew installs it automatically, and that release-archive users install it separately.
+- Documented the macOS execution sandbox behavior for `/dev/null` and nested sandbox suppression, and clarified approval-ticket consumption semantics.
+
 ## 0.3.2 - 2026-09-20
 
 ### Runtime
