@@ -87,7 +87,7 @@ impl JobManager {
         } else {
             argv.to_vec()
         };
-        let mut child = spawn(&effective_argv, &cwd, stdout, stderr)?;
+        let mut child = spawn(&effective_argv, &cwd, stdout, stderr, sandboxed)?;
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000)).min(MAX_TIMEOUT);
         let start = Instant::now();
         let (exit_code, timed_out) = loop {
@@ -142,7 +142,7 @@ impl JobManager {
         } else {
             argv.to_vec()
         };
-        let child = spawn(&effective_argv, &cwd, stdout, stderr)?;
+        let child = spawn(&effective_argv, &cwd, stdout, stderr, sandboxed)?;
         let id = format!(
             "job_{}_{}",
             std::process::id(),
@@ -310,6 +310,7 @@ fn spawn(
     cwd: &PathBuf,
     stdout: File,
     stderr: File,
+    sandboxed: bool,
 ) -> Result<Child, std::io::Error> {
     let mut command = Command::new(&argv[0]);
     command
@@ -320,6 +321,9 @@ fn spawn(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     inherit_safe_environment(&mut command);
+    if sandboxed {
+        command.env(sandbox::SANDBOX_ENV_MARKER, "seatbelt");
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -564,6 +568,67 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("host-control executable"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_allows_dev_null() {
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground(
+                &ws,
+                &["/bin/sh".into(), "-c".into(), "printf ok >/dev/null".into()],
+                None,
+                Some(2_000),
+                true,
+            )
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr_tail);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_allows_git_to_open_dev_null() {
+        if !std::path::Path::new("/usr/bin/git").exists() {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        // `git init` is one of the shortest developer commands that fails
+        // outright when /dev/null is denied under Seatbelt.
+        let init = manager
+            .run_foreground(
+                &ws,
+                &["/usr/bin/git".into(), "init".into()],
+                None,
+                Some(5_000),
+                true,
+            )
+            .unwrap();
+        assert_eq!(init.exit_code, Some(0), "{}", init.stderr_tail);
+        let status = manager
+            .run_foreground(
+                &ws,
+                &["/usr/bin/git".into(), "status".into(), "--short".into()],
+                None,
+                Some(5_000),
+                true,
+            )
+            .unwrap();
+        assert_eq!(status.exit_code, Some(0), "{}", status.stderr_tail);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn nested_web_harness_sandbox_does_not_reapply_seatbelt() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let argv = vec!["/bin/echo".to_string(), "ok".to_string()];
+        let wrapped = sandbox::wrap_argv_with_state(&ws, &argv, true);
+        assert_eq!(wrapped, argv);
     }
 
     #[cfg(target_os = "macos")]
