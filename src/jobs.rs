@@ -635,11 +635,22 @@ mod tests {
     #[test]
     fn seatbelt_blocks_writes_outside_workspace() {
         let workspace_dir = tempfile::tempdir().unwrap();
-        let home = std::env::var_os("HOME").expect("HOME is required for macOS sandbox test");
-        let outside_dir = tempfile::Builder::new()
+        let Some(home) = std::env::var_os("HOME") else {
+            eprintln!("skipping: HOME is not set");
+            return;
+        };
+        // Setting up the out-of-workspace target is a *host* operation. When
+        // this test suite itself runs inside a web-harness Seatbelt profile the
+        // host denies it, which is a property of the harness, not of the code
+        // under test. Skip rather than fail so the suite stays usable from
+        // `web-harness exec cargo test`.
+        let Ok(outside_dir) = tempfile::Builder::new()
             .prefix("web-harness-outside-")
             .tempdir_in(home)
-            .unwrap();
+        else {
+            eprintln!("skipping: host denied creating the out-of-workspace directory");
+            return;
+        };
         let outside = outside_dir.path().join("blocked.txt");
         let ws = Workspace::new(workspace_dir.path()).unwrap();
         let manager = JobManager::new();
@@ -717,7 +728,13 @@ mod tests {
         if !std::path::Path::new("/usr/bin/nc").exists() {
             return;
         }
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // Binding the listener is host work; an enclosing web-harness sandbox
+        // denies it. Skip instead of failing, since that is the harness working
+        // as intended rather than a regression in the sandbox code.
+        let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
+            eprintln!("skipping: host denied binding a loopback listener");
+            return;
+        };
         let port = listener.local_addr().unwrap().port();
         listener.set_nonblocking(true).unwrap();
 
