@@ -1,4 +1,5 @@
 use crate::command_policy;
+use crate::process;
 use crate::redact;
 use crate::sandbox;
 use crate::workspace::{Workspace, WorkspaceError};
@@ -6,7 +7,7 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -57,6 +58,27 @@ struct Job {
     exit_code: Option<i32>,
 }
 
+impl Job {
+    /// Marks the job as finished once the child has been reaped.
+    ///
+    /// A process terminated by a signal has no exit code; jobs report `-1` for
+    /// that case instead of exposing the raw `None`. This is also the only
+    /// transition out of the running state, so `is_running` stays the single
+    /// definition of "live".
+    fn record_exit(&mut self, status: std::process::ExitStatus) {
+        self.exit_code = status.code().or(Some(-1));
+    }
+
+    fn is_running(&self) -> bool {
+        self.exit_code.is_none()
+    }
+
+    fn remove_artifacts(&self) {
+        let _ = fs::remove_file(&self.stdout_path);
+        let _ = fs::remove_file(&self.stderr_path);
+    }
+}
+
 pub struct JobManager {
     jobs: HashMap<String, Job>,
     completed_order: VecDeque<String>,
@@ -78,16 +100,11 @@ impl JobManager {
         timeout_ms: Option<u64>,
         sandboxed: bool,
     ) -> Result<ExecResult, JobError> {
-        validate_argv(argv)?;
-        let cwd = resolve_cwd(workspace, cwd)?;
-        let (stdout_path, stdout) = create_artifact("stdout")?;
-        let (stderr_path, stderr) = create_artifact("stderr")?;
-        let effective_argv = if sandboxed {
-            sandbox::wrap_argv(workspace, argv)
-        } else {
-            argv.to_vec()
-        };
-        let mut child = spawn(&effective_argv, &cwd, stdout, stderr, sandboxed)?;
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed)?;
+        let SpawnedProcess {
+            mut child,
+            artifacts,
+        } = spawned;
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000)).min(MAX_TIMEOUT);
         let start = Instant::now();
         let (exit_code, timed_out) = loop {
@@ -102,10 +119,9 @@ impl JobManager {
             std::thread::sleep(Duration::from_millis(20));
         };
 
-        let (stdout_tail, stdout_truncated) = read_tail(&stdout_path, OUTPUT_TAIL_BYTES)?;
-        let (stderr_tail, stderr_truncated) = read_tail(&stderr_path, OUTPUT_TAIL_BYTES)?;
-        let _ = fs::remove_file(stdout_path);
-        let _ = fs::remove_file(stderr_path);
+        let (stdout_tail, stdout_truncated) = read_tail(&artifacts.stdout.path, OUTPUT_TAIL_BYTES)?;
+        let (stderr_tail, stderr_truncated) = read_tail(&artifacts.stderr.path, OUTPUT_TAIL_BYTES)?;
+        artifacts.remove();
         Ok(ExecResult {
             exit_code,
             stdout_tail: redact::text(&stdout_tail),
@@ -123,26 +139,11 @@ impl JobManager {
         cwd: Option<&str>,
         sandboxed: bool,
     ) -> Result<JobStatus, JobError> {
-        validate_argv(argv)?;
         self.refresh();
-        if self
-            .jobs
-            .values()
-            .filter(|job| job.exit_code.is_none())
-            .count()
-            >= MAX_BACKGROUND_JOBS
-        {
+        if self.jobs.values().filter(|job| job.is_running()).count() >= MAX_BACKGROUND_JOBS {
             return Err(JobError::Limit);
         }
-        let cwd = resolve_cwd(workspace, cwd)?;
-        let (stdout_path, stdout) = create_artifact("stdout")?;
-        let (stderr_path, stderr) = create_artifact("stderr")?;
-        let effective_argv = if sandboxed {
-            sandbox::wrap_argv(workspace, argv)
-        } else {
-            argv.to_vec()
-        };
-        let child = spawn(&effective_argv, &cwd, stdout, stderr, sandboxed)?;
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed)?;
         let id = format!(
             "job_{}_{}",
             std::process::id(),
@@ -151,9 +152,9 @@ impl JobManager {
         self.jobs.insert(
             id.clone(),
             Job {
-                child,
-                stdout_path,
-                stderr_path,
+                child: spawned.child,
+                stdout_path: spawned.artifacts.stdout.path,
+                stderr_path: spawned.artifacts.stderr.path,
                 exit_code: None,
             },
         );
@@ -170,20 +171,20 @@ impl JobManager {
                 .jobs
                 .get_mut(id)
                 .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-            let was_running = job.exit_code.is_none();
+            let was_running = job.is_running();
             if was_running {
                 if let Some(status) = job.child.try_wait()? {
-                    job.exit_code = status.code().or(Some(-1));
+                    job.record_exit(status);
                 }
             }
             (
-                if job.exit_code.is_some() {
-                    "exited".to_string()
-                } else {
+                if job.is_running() {
                     "running".to_string()
+                } else {
+                    "exited".to_string()
                 },
                 job.exit_code,
-                was_running && job.exit_code.is_some(),
+                was_running,
             )
         };
         if newly_completed {
@@ -202,13 +203,13 @@ impl JobManager {
                 .jobs
                 .get_mut(id)
                 .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-            let was_running = job.exit_code.is_none();
+            let was_running = job.is_running();
             if was_running {
                 terminate(&mut job.child)?;
                 let status = job.child.wait()?;
-                job.exit_code = status.code().or(Some(-1));
+                job.record_exit(status);
             }
-            (job.exit_code, was_running && job.exit_code.is_some())
+            (job.exit_code, was_running)
         };
         if newly_completed {
             self.record_completed(id);
@@ -237,9 +238,9 @@ impl JobManager {
     fn refresh(&mut self) {
         let mut completed = Vec::new();
         for (id, job) in &mut self.jobs {
-            if job.exit_code.is_none() {
+            if job.is_running() {
                 if let Ok(Some(status)) = job.child.try_wait() {
-                    job.exit_code = status.code().or(Some(-1));
+                    job.record_exit(status);
                     completed.push(id.clone());
                 }
             }
@@ -249,14 +250,16 @@ impl JobManager {
         }
     }
 
+    /// Records a finished job and evicts the oldest completed jobs once the
+    /// retention limit is exceeded. Running jobs are never evicted.
     fn record_completed(&mut self, id: &str) {
         self.completed_order.push_back(id.to_string());
         while self.completed_order.len() > MAX_RETAINED_COMPLETED_JOBS {
-            if let Some(evicted_id) = self.completed_order.pop_front() {
-                if let Some(job) = self.jobs.remove(&evicted_id) {
-                    let _ = fs::remove_file(job.stdout_path);
-                    let _ = fs::remove_file(job.stderr_path);
-                }
+            let Some(evicted_id) = self.completed_order.pop_front() else {
+                break;
+            };
+            if let Some(job) = self.jobs.remove(&evicted_id) {
+                job.remove_artifacts();
             }
         }
     }
@@ -265,12 +268,11 @@ impl JobManager {
 impl Drop for JobManager {
     fn drop(&mut self) {
         for job in self.jobs.values_mut() {
-            if job.exit_code.is_none() {
+            if job.is_running() {
                 let _ = terminate(&mut job.child);
                 let _ = job.child.wait();
             }
-            let _ = fs::remove_file(&job.stdout_path);
-            let _ = fs::remove_file(&job.stderr_path);
+            job.remove_artifacts();
         }
     }
 }
@@ -293,23 +295,76 @@ fn resolve_cwd(workspace: &Workspace, cwd: Option<&str>) -> Result<PathBuf, JobE
     }
 }
 
-fn create_artifact(stream: &str) -> Result<(PathBuf, File), std::io::Error> {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "web-harness-{}-{}-{}.log",
-        std::process::id(),
-        id,
-        stream
-    ));
-    let file = File::create(&path)?;
-    Ok((path, file))
+/// One captured output stream: the file the child writes to and its path, which
+/// is kept so the artifact can be read back and cleaned up later.
+struct OutputArtifact {
+    path: PathBuf,
+    file: File,
+}
+
+impl OutputArtifact {
+    fn create(stream: &str) -> Result<Self, std::io::Error> {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "web-harness-{}-{}-{}.log",
+            std::process::id(),
+            id,
+            stream
+        ));
+        let file = File::create(&path)?;
+        Ok(Self { path, file })
+    }
+}
+
+/// Both captured output streams of a child process.
+struct OutputArtifacts {
+    stdout: OutputArtifact,
+    stderr: OutputArtifact,
+}
+
+impl OutputArtifacts {
+    fn create() -> Result<Self, std::io::Error> {
+        Ok(Self {
+            stdout: OutputArtifact::create("stdout")?,
+            stderr: OutputArtifact::create("stderr")?,
+        })
+    }
+
+    fn remove(&self) {
+        let _ = fs::remove_file(&self.stdout.path);
+        let _ = fs::remove_file(&self.stderr.path);
+    }
+}
+
+struct SpawnedProcess {
+    child: Child,
+    artifacts: OutputArtifacts,
+}
+
+/// Validates the request, starts the child in its own process group, and returns
+/// the running child together with the artifacts capturing its output.
+fn spawn_job(
+    workspace: &Workspace,
+    argv: &[String],
+    cwd: Option<&str>,
+    sandboxed: bool,
+) -> Result<SpawnedProcess, JobError> {
+    validate_argv(argv)?;
+    let cwd = resolve_cwd(workspace, cwd)?;
+    let artifacts = OutputArtifacts::create()?;
+    let effective_argv = if sandboxed {
+        sandbox::wrap_argv(workspace, argv)
+    } else {
+        argv.to_vec()
+    };
+    let child = spawn(&effective_argv, &cwd, &artifacts, sandboxed)?;
+    Ok(SpawnedProcess { child, artifacts })
 }
 
 fn spawn(
     argv: &[String],
-    cwd: &PathBuf,
-    stdout: File,
-    stderr: File,
+    cwd: &Path,
+    artifacts: &OutputArtifacts,
     sandboxed: bool,
 ) -> Result<Child, std::io::Error> {
     let mut command = Command::new(&argv[0]);
@@ -318,24 +373,15 @@ fn spawn(
         .current_dir(cwd)
         .env_clear()
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+        .stdout(artifacts.stdout.file.try_clone()?)
+        .stderr(artifacts.stderr.file.try_clone()?);
     inherit_safe_environment(&mut command);
     if sandboxed {
         command.env(sandbox::SANDBOX_ENV_MARKER, "seatbelt");
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
+    // A missing libc call can only fail before `exec`, and the resulting spawn
+    // error is reported like any other launch failure.
+    let _ = process::detach_into_own_group(&mut command);
     command.spawn()
 }
 
@@ -368,18 +414,15 @@ fn inherit_safe_environment(command: &mut Command) {
 
 fn terminate(child: &mut Child) -> Result<(), std::io::Error> {
     #[cfg(unix)]
-    unsafe {
-        if libc::kill(-(child.id() as i32), libc::SIGTERM) == -1 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
+    {
+        // Reap the child if the process group was already gone; signalling an
+        // absent group is expected during cleanup and is not an error.
+        if let Err(error) = process::terminate_process_group(child.id()) {
+            if child.try_wait()?.is_none() {
+                return Err(std::io::Error::other(error.to_string()));
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
-        if child.try_wait()?.is_none() {
-            let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(unix))]
     {
@@ -387,7 +430,7 @@ fn terminate(child: &mut Child) -> Result<(), std::io::Error> {
     }
 }
 
-fn read_tail(path: &PathBuf, limit: usize) -> Result<(String, bool), std::io::Error> {
+fn read_tail(path: &Path, limit: usize) -> Result<(String, bool), std::io::Error> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len() as usize;
     let truncated = len > limit;
@@ -412,7 +455,7 @@ mod tests {
         let result = manager
             .run_foreground(
                 &ws,
-                &["sh".into(), "-c".into(), "printf hello".into()],
+                &["printf".into(), "hello".into()],
                 None,
                 Some(2_000),
                 false,
@@ -433,7 +476,7 @@ mod tests {
         let error = manager
             .run_foreground(
                 &ws,
-                &["sh".into(), "-c".into(), "pwd".into()],
+                &["pwd".into()],
                 Some("../"),
                 Some(2_000),
                 false,
@@ -447,6 +490,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn inline_evaluation_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let manager = JobManager::new();
+        let error = manager
+            .run_foreground(
+                &ws,
+                &["sh".into(), "-c".into(), "printf hello".into()],
+                None,
+                Some(2_000),
+                false,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("inline evaluation"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn background_job_can_be_polled() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
@@ -454,7 +515,7 @@ mod tests {
         let started = manager
             .start(
                 &ws,
-                &["sh".into(), "-c".into(), "printf done".into()],
+                &["printf".into(), "done".into()],
                 None,
                 false,
             )
@@ -482,7 +543,7 @@ mod tests {
             let started = manager
                 .start(
                     &ws,
-                    &["sh".into(), "-c".into(), "printf done".into()],
+                    &["printf".into(), "done".into()],
                     None,
                     false,
                 )
@@ -516,15 +577,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         let manager = JobManager::new();
+        let script = dir.path().join("dump_env.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s' \"$WEB_HARNESS_TEST_SECRET_TOKEN\"\n",
+        )
+        .unwrap();
         std::env::set_var("WEB_HARNESS_TEST_SECRET_TOKEN", "super-secret-value");
         let result = manager
             .run_foreground(
                 &ws,
-                &[
-                    "sh".into(),
-                    "-c".into(),
-                    "printf '%s' \"$WEB_HARNESS_TEST_SECRET_TOKEN\"".into(),
-                ],
+                &["sh".into(), "dump_env.sh".into()],
                 None,
                 Some(2_000),
                 false,
@@ -540,10 +603,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         let manager = JobManager::new();
+        fs::write(dir.path().join("secret.txt"), "API_KEY=abc123").unwrap();
         let result = manager
             .run_foreground(
                 &ws,
-                &["sh".into(), "-c".into(), "printf 'API_KEY=abc123'".into()],
+                &["cat".into(), "secret.txt".into()],
                 None,
                 Some(2_000),
                 false,
@@ -576,10 +640,12 @@ mod tests {
         let workspace_dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(workspace_dir.path()).unwrap();
         let manager = JobManager::new();
+        let script = workspace_dir.path().join("dev_null.sh");
+        fs::write(&script, "#!/bin/sh\nprintf ok >/dev/null\n").unwrap();
         let result = manager
             .run_foreground(
                 &ws,
-                &["/bin/sh".into(), "-c".into(), "printf ok >/dev/null".into()],
+                &["/bin/sh".into(), "dev_null.sh".into()],
                 None,
                 Some(2_000),
                 true,
@@ -654,14 +720,16 @@ mod tests {
         let outside = outside_dir.path().join("blocked.txt");
         let ws = Workspace::new(workspace_dir.path()).unwrap();
         let manager = JobManager::new();
+        let script = workspace_dir.path().join("blocked_write.sh");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf blocked > '{}'\n", outside.display()),
+        )
+        .unwrap();
         let result = manager
             .run_foreground(
                 &ws,
-                &[
-                    "/bin/sh".into(),
-                    "-c".into(),
-                    format!("printf blocked > '{}'", outside.display()),
-                ],
+                &["/bin/sh".into(), "blocked_write.sh".into()],
                 None,
                 Some(2_000),
                 true,
@@ -679,17 +747,19 @@ mod tests {
         let manager = JobManager::new();
         let temp_file =
             std::env::temp_dir().join(format!("web-harness-sandbox-test-{}", std::process::id()));
+        let script = workspace_dir.path().join("allowed_writes.sh");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf workspace > allowed.txt && printf temp > '{}'\n",
+                temp_file.display()
+            ),
+        )
+        .unwrap();
         let result = manager
             .run_foreground(
                 &ws,
-                &[
-                    "/bin/sh".into(),
-                    "-c".into(),
-                    format!(
-                        "printf workspace > allowed.txt && printf temp > '{}'",
-                        temp_file.display()
-                    ),
-                ],
+                &["/bin/sh".into(), "allowed_writes.sh".into()],
                 None,
                 Some(2_000),
                 true,

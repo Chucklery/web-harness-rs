@@ -45,7 +45,7 @@ Applies bounded Codex-style Add File, Update File, and Delete File operations. P
 
 ## exec
 
-Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent.
+Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent: the command is validated before it starts, and an inline-evaluation flag (`sh -c`, `bash -c`, `python -c`, `ruby -c`) on a known shell or interpreter is rejected with a message that points at the script-file form in the workspace. This is a policy filter rather than a security boundary — `PATH` can still contain a wrapper such as `env` — so the sandbox below remains the actual boundary.
 
 On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
 
