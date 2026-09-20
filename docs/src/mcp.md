@@ -31,6 +31,8 @@ Current limits:
 
 Uses the system ripgrep binary and returns at most 200 bounded matches.
 
+ripgrep is an external runtime dependency, not a bundled one. When `rg` is missing from `PATH` the tool returns a dependency error naming ripgrep and how to install it; all other tools continue to work. Homebrew installations declare ripgrep as a formula dependency.
+
 The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
 
 ## workspace_instructions
@@ -46,6 +48,10 @@ Applies bounded Codex-style Add File, Update File, and Delete File operations. P
 Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent.
 
 On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
+
+The macOS profile allows writes only inside the workspace, TMPDIR, `/tmp`, `/private/tmp`, and `/dev/null`. `/dev/null` is granted explicitly because shells, Git, and most compiler and build toolchains open it unconditionally; without it `git status` and similar commands fail with `Operation not permitted`.
+
+Child processes receive a `WEB_HARNESS_SANDBOX` marker. If web-harness execution itself runs inside a web-harness sandbox, the marker prevents a second Seatbelt profile from being applied — macOS rejects nested `sandbox-exec` with `sandbox_apply: Operation not permitted`, which previously broke `cargo test` run through `exec`. The marker suppresses re-wrapping only; the outer sandbox remains enforced.
 
 Foreground commands have a maximum 10 minute timeout and bounded stdout/stderr results. Background execution is limited to two concurrent jobs.
 
@@ -84,3 +90,5 @@ Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbit
 Approves or denies one-time request-bound tickets. Tickets expire after five minutes and are consumed after one successful authorization.
 
 The same ticket cannot be reused for a different command or Git operation.
+
+A ticket that fails to match the request is *not* consumed. An approval is consumed only when it is successfully used, or when it expires. A mismatching request returns an error and leaves the still-valid approval in place, so a client that mis-specifies a command can retry with the correct payload without re-approving. Denial removes the ticket explicitly.

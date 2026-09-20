@@ -1,6 +1,6 @@
 # Installation
 
-web-harness is distributed as one self-contained release bundle. Rust, Node, Electron, a browser runtime, and a separate tunnel-client installation are not required on the end-user machine.
+web-harness ships as one release bundle: the harness binary plus the official OpenAI tunnel-client runtime under `libexec/web-harness/`. The `search` tool additionally uses the system [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) binary. Homebrew installs ripgrep automatically; GitHub Release users install it separately. Rust, Node, Electron, a browser runtime, and a separate tunnel-client installation are not required on the end-user machine.
 
 ## GitHub Release
 
@@ -32,6 +32,21 @@ mkdir -p ~/.local/libexec/web-harness
 cp -R libexec/web-harness/. ~/.local/libexec/web-harness/
 ~~~
 
+The `search` runtime requires ripgrep in `PATH`. Install it separately:
+
+~~~bash
+# macOS
+brew install ripgrep
+
+# Debian/Ubuntu
+sudo apt install ripgrep
+
+# Fedora
+sudo dnf install ripgrep
+~~~
+
+Without ripgrep the `search` tool returns a clear dependency error; every other tool keeps working.
+
 ## Homebrew
 
 The official tap is:
@@ -54,6 +69,8 @@ brew install web-harness
 The release workflow also renders a version-specific Homebrew formula from the checked-in template and release checksums.
 
 The same formula supports both Intel Homebrew under /usr/local and Apple Silicon Homebrew under /opt/homebrew.
+
+The formula declares `depends_on "ripgrep"`, so Homebrew installs the `search` dependency automatically.
 
 ## From source
 

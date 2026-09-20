@@ -26,6 +26,8 @@ Your local repository
 
 Download the archive for your platform from a GitHub Release and verify SHA256SUMS. Release archives include the matching official OpenAI tunnel-client runtime, so users do not install tunnel-client separately.
 
+The `search` tool uses the system [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) binary. Homebrew installs it automatically as a formula dependency; GitHub Release users install it once with `brew install ripgrep` / `apt install ripgrep` / `dnf install ripgrep`.
+
 Supported release targets:
 
 - macOS Intel: x86_64-apple-darwin, including Intel Macs on macOS 13
