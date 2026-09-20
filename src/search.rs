@@ -5,7 +5,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
-    #[error("ripgrep is not available")]
+    #[error(
+        "ripgrep is required by the search tool but was not found in PATH; install ripgrep and restart web-harness (macOS/Homebrew: `brew install ripgrep`, Debian/Ubuntu: `apt install ripgrep`)"
+    )]
     RipgrepUnavailable,
     #[error("search failed: {0}")]
     Failed(String),
