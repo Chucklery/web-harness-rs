@@ -131,11 +131,7 @@ pub fn connect(
 
     if let Some(existing) = read_state()? {
         if process::process_alive(existing.tunnel_pid) {
-            let existing_denied = if existing.denied_paths.is_empty() {
-                denied.clone()
-            } else {
-                existing.denied_paths.clone()
-            };
+            let existing_denied = state_denied_paths(&existing, denied.clone());
             return Ok(connected_status(
                 Some(user_config),
                 existing,
@@ -268,20 +264,17 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
     };
     if !process::process_alive(state.tunnel_pid) {
         remove_state()?;
+        let stale_denied = state_denied_paths(&state, denied);
         let mut status = UserStatus::disconnected(
             configured,
             true,
             Some(state.workspace),
             "stale connection state was cleaned up",
         );
-        status.denied_paths = denied;
+        status.denied_paths = stale_denied;
         return Ok(status);
     }
-    let state_denied = if state.denied_paths.is_empty() {
-        denied
-    } else {
-        state.denied_paths.clone()
-    };
+    let state_denied = state_denied_paths(&state, denied);
     Ok(connected_status(
         user_config,
         state,
@@ -299,6 +292,14 @@ fn connected_status(
     let mut status = UserStatus::from_state(user_config, state, message);
     status.denied_paths = denied_paths;
     status
+}
+
+fn state_denied_paths(state: &RuntimeState, fallback: Vec<String>) -> Vec<String> {
+    if state.denied_paths.is_empty() {
+        fallback
+    } else {
+        state.denied_paths.clone()
+    }
 }
 
 pub fn disconnect() -> Result<UserStatus, RuntimeError> {
@@ -473,6 +474,21 @@ mod tests {
         }))
         .unwrap();
         assert!(value.denied_paths.is_empty());
+    }
+
+    #[test]
+    fn state_boundary_precedes_fallback_boundary() {
+        let state = RuntimeState {
+            schema_version: 1,
+            tunnel_pid: 42,
+            workspace: "/tmp/project".into(),
+            started_unix_s: 0,
+            denied_paths: vec![".private".into()],
+        };
+        assert_eq!(
+            state_denied_paths(&state, vec![".git".into()]),
+            [".private"]
+        );
     }
 
     #[test]
