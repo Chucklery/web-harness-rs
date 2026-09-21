@@ -61,10 +61,10 @@ Patch 支持有界的 Add、Update 和 Delete。路径始终受工作区边界�
 
 ## 审批
 
-一次性票据绑定到精确请求，五分钟过期。票据只在授权成功时被消费；请求不匹配会报错并保留票据，因此用正确参数重试无需重新审批。Deny 会显式删除票据。
+一次性审批由 MCP Host 独占。当初始化后的客户端声明支持 elicitation 时，web-harness 会发送 `elicitation/create` 和有界确认表单，只有客户端返回接受后才执行。审批票据不会作为可调用 MCP 工具暴露，因此模型不能批准自己的请求，也不能通过 `call_runtime_tool` 绕过 Host。
 
-`permission` 工具通过 MCP `ToolAnnotations` 声明为 destructive，因此 ChatGPT 会在审批调用到达 web-harness 前要求用户确认。该注解构成用户交互边界；进程内权限引擎继续负责服务端的精确请求绑定和一次性消费。
+不支持 elicitation 的客户端会收到 `approval_required`，需要等待 Host 侧审批机制；web-harness 不会静默执行。票据绑定精确请求，五分钟过期，并在一次成功授权后消费。
 
-`permission` 只能直接调用。adaptive `call_runtime_tool` 网关会拒绝转发它，防止利用网关的通用注解绕过 Host 确认。
+票据不匹配时不会被消费；拒绝会显式删除票据。
 
 兼容控制接口不会引入第二个 Agent，它们只调用现有受限 Runtime。

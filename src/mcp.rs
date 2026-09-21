@@ -9,13 +9,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Request {
     jsonrpc: String,
     id: Option<Value>,
     method: String,
     #[serde(default)]
     params: Value,
+}
+
+#[derive(Default)]
+struct Session {
+    next_server_request_id: u64,
+    elicitation_supported: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,32 +36,191 @@ struct Response {
 
 pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
+    let mut stdin = stdin.lock();
     let mut stdout = io::stdout().lock();
     let mut jobs = JobManager::new();
     let mut permissions = PermissionEngine::new()?;
     let runtime = RuntimeRegistry::default();
-    for line in stdin.lock().lines() {
-        let line = line?;
+    let mut session = Session {
+        next_server_request_id: 1,
+        ..Session::default()
+    };
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<Request>(&line) {
+        let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) if request.id.is_none() && request.method.starts_with("notifications/") => {
                 continue;
             }
-            Ok(request) => handle(request, &workspace, &mut jobs, &mut permissions, &runtime),
-            Err(error) => Response {
-                jsonrpc: "2.0",
-                id: None,
-                result: None,
-                error: Some(json!({"code": -32700, "message": error.to_string()})),
-            },
+            Ok(request) => request,
+            Err(error) => {
+                let response = Response {
+                    jsonrpc: "2.0",
+                    id: None,
+                    result: None,
+                    error: Some(json!({"code": -32700, "message": error.to_string()})),
+                };
+                serde_json::to_writer(&mut stdout, &response)?;
+                writeln!(&mut stdout)?;
+                stdout.flush()?;
+                continue;
+            }
         };
+        if request.method == "initialize" {
+            session.elicitation_supported = request
+                .params
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("elicitation"))
+                .is_some_and(Value::is_object);
+        }
+        let mut response = handle(
+            request.clone(),
+            &workspace,
+            &mut jobs,
+            &mut permissions,
+            &runtime,
+        );
+        if session.elicitation_supported
+            && request.method == "tools/call"
+            && is_approval_required(&response)
+        {
+            if let Some(approval_id) = response
+                .result
+                .as_ref()
+                .and_then(|result| result.get("structuredContent"))
+                .and_then(|value| value.get("approval"))
+                .and_then(|approval| approval.get("id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+            {
+                match request_host_approval(&mut stdin, &mut stdout, &mut session, &response)? {
+                    Some(true) => {
+                        permissions.approve(&approval_id)?;
+                        let mut retry = request;
+                        let arguments = retry
+                            .params
+                            .get_mut("arguments")
+                            .and_then(Value::as_object_mut)
+                            .ok_or("tools/call arguments must be an object")?;
+                        arguments.insert("approval_id".into(), Value::String(approval_id));
+                        response = handle(retry, &workspace, &mut jobs, &mut permissions, &runtime);
+                    }
+                    Some(false) => {
+                        permissions.deny(&approval_id)?;
+                        response = denied_response(&response);
+                    }
+                    None => {}
+                }
+            }
+        }
         serde_json::to_writer(&mut stdout, &response)?;
         writeln!(&mut stdout)?;
         stdout.flush()?;
     }
     Ok(())
+}
+
+fn is_approval_required(response: &Response) -> bool {
+    response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("structuredContent"))
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        == Some("approval_required")
+}
+
+fn request_host_approval<R: BufRead, W: Write>(
+    stdin: &mut R,
+    stdout: &mut W,
+    session: &mut Session,
+    response: &Response,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let structured = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("structuredContent"))
+        .ok_or("approval response is missing structured content")?;
+    let message = structured
+        .get("approval")
+        .and_then(|approval| approval.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or("Confirm this protected operation");
+    let request_id = format!("web_harness_elicitation_{}", session.next_server_request_id);
+    session.next_server_request_id = session.next_server_request_id.saturating_add(1);
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "elicitation/create",
+        "params": {
+            "mode": "form",
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "approved": {"type": "boolean", "description": "Approve this one-time operation"}
+                },
+                "required": ["approved"],
+                "additionalProperties": false
+            }
+        }
+    });
+    serde_json::to_writer(&mut *stdout, &request)?;
+    writeln!(stdout)?;
+    stdout.flush()?;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if stdin.read_line(&mut line)? == 0 {
+            return Ok(None);
+        }
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if value.get("id") != Some(&json!(request_id)) {
+            continue;
+        }
+        let Some(result) = value.get("result") else {
+            return Ok(Some(false));
+        };
+        if result.get("action").and_then(Value::as_str) == Some("accept") {
+            return Ok(Some(
+                result
+                    .get("content")
+                    .and_then(|content| content.get("approved"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ));
+        }
+        return Ok(Some(false));
+    }
+}
+
+fn denied_response(response: &Response) -> Response {
+    let capability = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("structuredContent"))
+        .and_then(|value| value.get("capability"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    Response {
+        jsonrpc: "2.0",
+        id: response.id.clone(),
+        result: Some(runtime_content(json!({
+            "status": "denied",
+            "capability": capability
+        }))),
+        error: None,
+    }
 }
 
 fn handle(
@@ -217,24 +382,6 @@ fn handle(
                         "approval_id": {"type": "string"}
                     },
                     "required": ["action"],
-                    "additionalProperties": false
-                }
-            },
-            {
-                "name": "permission",
-                "description": "Approve or deny a one-time execution approval ticket. Approval must be confirmed by the user through the MCP host.",
-                "annotations": {
-                    "readOnlyHint": false,
-                    "destructiveHint": true,
-                    "openWorldHint": false
-                },
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": {"type": "string", "enum": ["approve", "deny"]},
-                        "id": {"type": "string"}
-                    },
-                    "required": ["action", "id"],
                     "additionalProperties": false
                 }
             },
@@ -444,12 +591,6 @@ fn call_tool(
                 return Err(json!({
                     "code": -32602,
                     "message": format!("runtime tool is not exposed through the compatibility gateway: {tool}")
-                }));
-            }
-            if tool == "permission" {
-                return Err(json!({
-                    "code": -32602,
-                    "message": "permission is direct-only so MCP host confirmation cannot be bypassed"
                 }));
             }
             let forwarded = json!({

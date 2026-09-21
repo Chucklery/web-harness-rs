@@ -109,14 +109,10 @@ Mutation calls may provide `expected_head`; after approval and immediately befor
 
 `diff` accepts optional `offset` and `limit` arguments to return bounded file/hunk chunks with a parser-ready `next_offset`; keep the other diff arguments unchanged when continuing. `show_file` reads one workspace-scoped path from a validated revision. Commit accepts an optional pathspec list so existing staged changes outside that list are not included. Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
 
-## permission
+## Approval
 
-Approves or denies one-time request-bound tickets. Tickets expire after five minutes and are consumed after one successful authorization.
+One-time approvals are host-only. When the initialized MCP client advertises elicitation support, web-harness sends `elicitation/create` with a bounded confirmation form and only executes after the client returns an accepted response. The approval ticket is never exposed as a callable MCP tool, so the model cannot approve its own request or route approval through `call_runtime_tool`.
 
-The tool is declared as destructive through MCP `ToolAnnotations`, so ChatGPT asks the user to confirm the approval call before it reaches web-harness. The annotation is the user-interaction boundary; the in-process permission engine remains the server-side binding and single-use boundary.
+Clients without elicitation support receive `approval_required` and must wait for a host-side approval mechanism; web-harness does not silently execute the operation. Tickets expire after five minutes and are consumed after one successful authorization.
 
-`permission` is direct-only. The adaptive `call_runtime_tool` gateway rejects it so the gateway's generic annotation cannot bypass host confirmation.
-
-The same ticket cannot be reused for a different command or Git operation.
-
-A ticket that fails to match the request is *not* consumed. An approval is consumed only when it is successfully used, or when it expires. A mismatching request returns an error and leaves the still-valid approval in place, so a client that mis-specifies a command can retry with the correct payload without re-approving. Denial removes the ticket explicitly.
+The same ticket cannot be reused for a different command or Git operation. A ticket that fails to match the request is *not* consumed. Denial removes the ticket explicitly.

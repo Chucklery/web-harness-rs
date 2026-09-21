@@ -50,7 +50,6 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
         "exec",
         "job",
         "git",
-        "permission",
         "runtime_status",
         "work_on_project",
         "tool_manifest",
@@ -58,15 +57,7 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
     ] {
         assert!(names.contains(&expected), "missing MCP tool: {expected}");
     }
-    let permission = tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|tool| tool["name"] == "permission")
-        .unwrap();
-    assert_eq!(permission["annotations"]["readOnlyHint"], false);
-    assert_eq!(permission["annotations"]["destructiveHint"], true);
-    assert_eq!(permission["annotations"]["openWorldHint"], false);
+    assert!(!names.contains(&"permission"));
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
@@ -158,7 +149,7 @@ fn adaptive_runtime_control_tools_are_callable() {
     assert!(permission_bypass["error"]["message"]
         .as_str()
         .unwrap()
-        .contains("direct-only"));
+        .contains("not exposed"));
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
@@ -331,7 +322,12 @@ fn git_mutation_requires_and_consumes_approval() {
     writeln!(
         stdin,
         "{}",
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{"capabilities":{"elicitation":{"form":{}}}}
+        })
     )
     .unwrap();
     stdin.flush().unwrap();
@@ -349,44 +345,23 @@ fn git_mutation_requires_and_consumes_approval() {
     )
     .unwrap();
     stdin.flush().unwrap();
-    let approval_response: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-    let approval_text = approval_response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    let approval: Value = serde_json::from_str(approval_text).unwrap();
-    assert_eq!(approval["status"], "approval_required");
-    let approval_id = approval["approval"]["id"].as_str().unwrap().to_string();
+    let elicitation: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(elicitation["method"], "elicitation/create");
+    let elicitation_id = elicitation["id"].clone();
 
     writeln!(
         stdin,
         "{}",
         serde_json::json!({
             "jsonrpc":"2.0",
-            "id":3,
-            "method":"tools/call",
-            "params":{"name":"permission","arguments":{"action":"approve","id":approval_id}}
-        })
-    )
-    .unwrap();
-    stdin.flush().unwrap();
-    let _: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-
-    writeln!(
-        stdin,
-        "{}",
-        serde_json::json!({
-            "jsonrpc":"2.0",
-            "id":4,
-            "method":"tools/call",
-            "params":{
-                "name":"git",
-                "arguments":{"action":"add","pathspec":["a.txt"],"approval_id":approval_id}
-            }
+            "id":elicitation_id,
+            "result":{"action":"accept","content":{"approved":true}}
         })
     )
     .unwrap();
     stdin.flush().unwrap();
     let result: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(result["id"], 2);
     assert!(result.get("error").is_none());
 
     drop(stdin);

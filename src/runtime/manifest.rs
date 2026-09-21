@@ -19,14 +19,9 @@ pub fn describe(
         .into_iter()
         .filter(|name| requested.map(|wanted| wanted == *name).unwrap_or(true))
         .map(|name| {
-            let route = if name == "permission" {
-                "direct_only"
-            } else {
-                "call_runtime_tool"
-            };
             json!({
                 "name": name,
-                "route": route,
+                "route": "call_runtime_tool",
                 "direct_tool_available": true,
                 "input_schema_source": "tools/list"
             })
@@ -48,10 +43,6 @@ mod tests {
         assert_eq!(
             describe(&registry, Some("git")).unwrap()["tools"][0]["name"],
             "git"
-        );
-        assert_eq!(
-            describe(&registry, Some("permission")).unwrap()["tools"][0]["route"],
-            "direct_only"
         );
         assert!(describe(&registry, Some("unknown")).is_err());
     }

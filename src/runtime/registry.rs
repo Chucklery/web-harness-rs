@@ -5,7 +5,6 @@ use super::git::GitRuntime;
 use super::job::JobRuntime;
 use super::list_files::ListFilesRuntime;
 use super::patch::PatchRuntime;
-use super::permission::PermissionRuntime;
 use super::search::SearchRuntime;
 use super::tool_trait::{RuntimeTool, RuntimeToolError};
 use super::workspace::{WorkspaceInfoRuntime, WorkspaceInstructionsRuntime};
@@ -68,7 +67,6 @@ impl Default for RuntimeRegistry {
         registry.register(WorkspaceInfoRuntime);
         registry.register(WorkspaceInstructionsRuntime);
         registry.register(PatchRuntime);
-        registry.register(PermissionRuntime);
         registry
     }
 }
@@ -88,8 +86,7 @@ mod tests {
         assert!(registry.tools.contains_key("workspace_info"));
         assert!(registry.tools.contains_key("workspace_instructions"));
         assert!(registry.tools.contains_key("patch"));
-        assert!(registry.tools.contains_key("permission"));
         assert!(registry.tools.contains_key("list_files"));
-        assert_eq!(registry.len(), 10);
+        assert_eq!(registry.len(), 9);
     }
 }

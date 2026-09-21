@@ -43,7 +43,7 @@ There is exactly one external runtime dependency: the `search` tool invokes the 
 
 MCP transport is being separated from local tool execution through a small in-process Tool Runtime. The MCP layer remains responsible for protocol parsing, response envelopes, and transport-specific error mapping; runtime tools own bounded workspace operations.
 
-The `RuntimeTool` interface and `RuntimeRegistry` now dispatch all ten direct tools: workspace info/instructions, file reads, bounded file listing, search, patch, exec, job control, Git, and approval-ticket administration. Direct MCP calls and the adaptive-runtime compatibility gateway share the same registry path.
+The `RuntimeTool` interface and `RuntimeRegistry` dispatch the nine bounded workspace tools: workspace info/instructions, file reads, bounded file listing, search, patch, exec, job control, and Git. Approval-ticket administration is host-only and is not exposed through either MCP tool listing or the adaptive-runtime compatibility gateway. Direct MCP calls and the adaptive-runtime compatibility gateway share the same registry path.
 
 This boundary adds no second process, model loop, daemon, or database. Its only external runtime dependency is the system ripgrep binary used by `search`.
 
@@ -53,7 +53,7 @@ Runtime calls receive one `ExecutionContext` containing the workspace boundary, 
 
 Permissions use explicit capabilities such as `workspace.read`, `workspace.sensitive.read`, `workspace.write`, `process.execute`, `job.control`, `git.read`, `git.local.write`, and `git.remote.write`. Approval tickets are cryptographically bound to the requested capability as well as the exact command payload, so an approval cannot be replayed for a stronger capability.
 
-Ticket consumption happens only on a successful authorization. Expiry invalidates a ticket; denial removes it explicitly. A mismatching request — wrong capability, wrong argv, wrong cwd, or wrong background mode — fails without consuming the ticket, because a rejected request has not used the approval it was issued for. A retry with the correct payload therefore still succeeds within the five-minute window.
+Ticket consumption happens only on a successful authorization. The MCP transport can ask the Host for elicitation confirmation, but the model cannot call an approval tool. Expiry invalidates a ticket; denial removes it explicitly. A mismatching request — wrong capability, wrong argv, wrong cwd, or wrong background mode — fails without consuming the ticket, because a rejected request has not used the approval it was issued for. A retry with the correct payload therefore still succeeds within the five-minute window.
 
 Execution network policy is part of the same approval digest. The default is deny; an outbound-only Seatbelt profile requires a distinct one-time approval, and systems without a native backend reject that upgrade rather than silently running unsandboxed.
 
@@ -73,7 +73,7 @@ Accepted architectural constraints are maintained in this documentation site and
 
 Some ChatGPT Codex connector clients expect a small control surface before calling workspace tools. web-harness implements a compatibility shim for `runtime_status`, `work_on_project`, `tool_manifest`, and `call_runtime_tool`.
 
-This is not a second agent runtime. `work_on_project` can only bind to the single workspace already configured when the stdio server starts, and `call_runtime_tool` can only dispatch to the existing bounded workspace/file/search/patch/exec/job/Git/permission tools. The shim does not add a database, project daemon, workflow engine, model client, or additional filesystem authority.
+This is not a second agent runtime. `work_on_project` can only bind to the single workspace already configured when the stdio server starts, and `call_runtime_tool` can only dispatch to the existing bounded workspace/file/search/patch/exec/job/Git tools. The shim does not add a database, project daemon, workflow engine, model client, or additional filesystem authority.
 
 ## Lightweight composition rules
 
