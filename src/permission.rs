@@ -54,6 +54,7 @@ pub struct ExecAuthorization {
     pub background: bool,
     pub network: NetworkPolicy,
     pub expected_head: Option<String>,
+    pub stdin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +197,14 @@ impl PermissionEngine {
             }
             None => hasher.update([0]),
         }
+        match &request.stdin {
+            Some(stdin) => {
+                hasher.update([1]);
+                hasher.update((stdin.len() as u64).to_le_bytes());
+                hasher.update(stdin.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
         hasher.finalize().into()
     }
 
@@ -217,6 +226,7 @@ mod tests {
             background: false,
             network: NetworkPolicy::Deny,
             expected_head: None,
+            stdin: None,
         }
     }
 
@@ -264,6 +274,22 @@ mod tests {
 
         let mut changed = request.clone();
         changed.expected_head = Some("def456".into());
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &changed),
+            Err(PermissionError::Mismatch)
+        ));
+    }
+
+    #[test]
+    fn approval_is_bound_to_stdin() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut request = request(&["cat"]);
+        request.stdin = Some("first".into());
+        let ticket = request_ticket(&mut engine, &request);
+        engine.approve(&ticket.id).unwrap();
+
+        let mut changed = request.clone();
+        changed.stdin = Some("second".into());
         assert!(matches!(
             engine.consume_exec(&ticket.id, &changed),
             Err(PermissionError::Mismatch)

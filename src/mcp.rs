@@ -168,6 +168,7 @@ fn handle(
                         "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 64},
                         "cwd": {"type": "string"},
                         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
+                        "stdin": {"type": "string", "maxLength": 65536},
                         "background": {"type": "boolean"},
                         "network": {"type": "string", "enum": ["deny", "outbound"], "default": "deny"},
                         "approval_id": {"type": "string"}

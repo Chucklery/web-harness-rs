@@ -69,6 +69,8 @@ Child processes receive a `WEB_HARNESS_SANDBOX` marker. If web-harness execution
 
 Foreground commands have a maximum 10 minute timeout and bounded stdout/stderr results. Background execution is limited to two concurrent jobs.
 
+Exec optionally accepts one-shot UTF-8 `stdin` input up to 64 KiB. The input is staged through a host-managed temporary file, then closed; PTY and interactive sessions are not provided. The exact input is bound into approval tickets.
+
 ## job
 
 Polls, waits for, lists, cancels, or reads bounded stdout/stderr tails from background jobs. The output action accepts a byte cursor for incremental reads and returns the next cursor. Job output spills to temporary files instead of growing without bound in memory. Owned process groups are terminated when the host exits.

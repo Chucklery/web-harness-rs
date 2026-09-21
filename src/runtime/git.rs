@@ -82,6 +82,7 @@ impl RuntimeTool for GitRuntime {
                     background: false,
                     network: NetworkPolicy::Deny,
                     expected_head: expected_head.clone(),
+                    stdin: None,
                 };
                 if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                     context

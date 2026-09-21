@@ -62,6 +62,7 @@ struct Job {
     child: Child,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
+    stdin_path: Option<PathBuf>,
     state: JobState,
 }
 
@@ -130,6 +131,9 @@ impl Job {
     fn remove_artifacts(&self) {
         let _ = fs::remove_file(&self.stdout_path);
         let _ = fs::remove_file(&self.stderr_path);
+        if let Some(path) = &self.stdin_path {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -162,6 +166,7 @@ impl JobManager {
             timeout_ms,
             sandboxed,
             NetworkPolicy::Deny,
+            None,
         )
     }
 
@@ -173,11 +178,13 @@ impl JobManager {
         timeout_ms: Option<u64>,
         sandboxed: bool,
         network: NetworkPolicy,
+        stdin: Option<&[u8]>,
     ) -> Result<ExecResult, JobError> {
-        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network)?;
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network, stdin)?;
         let SpawnedProcess {
             mut child,
             artifacts,
+            stdin_path,
         } = spawned;
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000)).min(MAX_TIMEOUT);
         let start = Instant::now();
@@ -193,9 +200,16 @@ impl JobManager {
             std::thread::sleep(Duration::from_millis(20));
         };
 
-        let (stdout_tail, stdout_truncated) = read_tail(&artifacts.stdout.path, OUTPUT_TAIL_BYTES)?;
-        let (stderr_tail, stderr_truncated) = read_tail(&artifacts.stderr.path, OUTPUT_TAIL_BYTES)?;
+        let output = (
+            read_tail(&artifacts.stdout.path, OUTPUT_TAIL_BYTES),
+            read_tail(&artifacts.stderr.path, OUTPUT_TAIL_BYTES),
+        );
         artifacts.remove();
+        if let Some(path) = stdin_path {
+            let _ = fs::remove_file(path);
+        }
+        let ((stdout_tail, stdout_truncated), (stderr_tail, stderr_truncated)) =
+            (output.0?, output.1?);
         Ok(ExecResult {
             exit_code,
             stdout_tail: redact::text(&stdout_tail),
@@ -214,7 +228,7 @@ impl JobManager {
         cwd: Option<&str>,
         sandboxed: bool,
     ) -> Result<JobStatus, JobError> {
-        self.start_with_network(workspace, argv, cwd, sandboxed, NetworkPolicy::Deny)
+        self.start_with_network(workspace, argv, cwd, sandboxed, NetworkPolicy::Deny, None)
     }
 
     pub fn start_with_network(
@@ -224,12 +238,13 @@ impl JobManager {
         cwd: Option<&str>,
         sandboxed: bool,
         network: NetworkPolicy,
+        stdin: Option<&[u8]>,
     ) -> Result<JobStatus, JobError> {
         self.refresh();
         if self.jobs.values().filter(|job| job.is_running()).count() >= MAX_BACKGROUND_JOBS {
             return Err(JobError::Limit);
         }
-        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network)?;
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network, stdin)?;
         let id = format!(
             "job_{}_{}",
             std::process::id(),
@@ -241,6 +256,7 @@ impl JobManager {
                 child: spawned.child,
                 stdout_path: spawned.artifacts.stdout.path,
                 stderr_path: spawned.artifacts.stderr.path,
+                stdin_path: spawned.stdin_path,
                 state: JobState::Running,
             },
         );
@@ -405,6 +421,26 @@ mod tests {
             .unwrap();
         assert_eq!(result.stdout_tail, "hello");
         assert!(!result.timed_out);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreground_accepts_bounded_one_shot_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground_with_network(
+                &ws,
+                &["cat".into()],
+                None,
+                Some(2_000),
+                false,
+                NetworkPolicy::Deny,
+                Some(b"hello from stdin"),
+            )
+            .unwrap();
+        assert_eq!(result.stdout_tail, "hello from stdin");
     }
 
     #[cfg(unix)]

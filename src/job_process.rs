@@ -6,12 +6,13 @@ use crate::sandbox;
 use crate::sandbox::NetworkPolicy;
 use crate::workspace::Workspace;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_STDIN_BYTES: usize = 64 * 1024;
 
 pub(crate) struct OutputArtifact {
     pub(crate) path: PathBuf,
@@ -54,6 +55,7 @@ impl OutputArtifacts {
 pub(crate) struct SpawnedProcess {
     pub(crate) child: Child,
     pub(crate) artifacts: OutputArtifacts,
+    pub(crate) stdin_path: Option<PathBuf>,
 }
 
 pub(crate) fn spawn_job(
@@ -62,8 +64,14 @@ pub(crate) fn spawn_job(
     cwd: Option<&str>,
     sandboxed: bool,
     network: NetworkPolicy,
+    stdin: Option<&[u8]>,
 ) -> Result<SpawnedProcess, JobError> {
     validate_argv(argv)?;
+    if stdin.is_some_and(|input| input.len() > MAX_STDIN_BYTES) {
+        return Err(JobError::Invalid(
+            "stdin must be at most 65536 bytes".into(),
+        ));
+    }
     let cwd = match cwd {
         Some(cwd) => workspace.resolve(cwd)?,
         None => workspace.root().to_path_buf(),
@@ -74,8 +82,47 @@ pub(crate) fn spawn_job(
     } else {
         argv.to_vec()
     };
-    let child = spawn(&effective_argv, &cwd, &artifacts, sandboxed)?;
-    Ok(SpawnedProcess { child, artifacts })
+    let input = match stdin.map(create_stdin_file).transpose() {
+        Ok(input) => input,
+        Err(error) => {
+            artifacts.remove();
+            return Err(error.into());
+        }
+    };
+    let child = match spawn(
+        &effective_argv,
+        &cwd,
+        &artifacts,
+        sandboxed,
+        input.as_ref().map(|(path, _)| path.as_path()),
+    ) {
+        Ok(child) => child,
+        Err(error) => {
+            if let Some((path, _)) = input {
+                let _ = fs::remove_file(path);
+            }
+            artifacts.remove();
+            return Err(error.into());
+        }
+    };
+    Ok(SpawnedProcess {
+        child,
+        artifacts,
+        stdin_path: input.map(|(path, _)| path),
+    })
+}
+
+fn create_stdin_file(input: &[u8]) -> Result<(PathBuf, File), std::io::Error> {
+    static NEXT_STDIN_ID: AtomicU64 = AtomicU64::new(1);
+    let path = std::env::temp_dir().join(format!(
+        "web-harness-{}-stdin-{}.input",
+        std::process::id(),
+        NEXT_STDIN_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = File::create(&path)?;
+    file.write_all(input)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok((path, file))
 }
 
 fn validate_argv(argv: &[String]) -> Result<(), JobError> {
@@ -94,12 +141,16 @@ fn spawn(
     cwd: &Path,
     artifacts: &OutputArtifacts,
     sandboxed: bool,
+    stdin_path: Option<&Path>,
 ) -> Result<Child, std::io::Error> {
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(match stdin_path {
+            Some(path) => Stdio::from(File::open(path)?),
+            None => Stdio::null(),
+        })
         .stdout(artifacts.stdout.file.try_clone()?)
         .stderr(artifacts.stderr.file.try_clone()?);
     env::apply(&mut command);

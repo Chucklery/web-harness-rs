@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 const MAX_ARGV_ITEMS: usize = 64;
 const MAX_TIMEOUT_MS: u64 = 600_000;
+const MAX_STDIN_BYTES: usize = 64 * 1024;
 
 pub struct ExecRuntime;
 
@@ -60,6 +61,19 @@ impl RuntimeTool for ExecRuntime {
                 "timeout_ms must be 1..=600000",
             ));
         }
+        let stdin = arguments
+            .get("stdin")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if stdin
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_STDIN_BYTES)
+        {
+            return Err(RuntimeToolError::new(
+                RuntimeErrorKind::InvalidArguments,
+                "stdin must be at most 65536 UTF-8 bytes",
+            ));
+        }
 
         let network = match arguments
             .get("network")
@@ -97,6 +111,7 @@ impl RuntimeTool for ExecRuntime {
             background,
             network,
             expected_head: None,
+            stdin: stdin.clone(),
         };
         if capability.requires_approval()
             && (capability != Capability::ProcessExecute || !sandbox.enforced())
@@ -149,6 +164,7 @@ impl RuntimeTool for ExecRuntime {
                     cwd,
                     sandbox.enforced(),
                     network,
+                    stdin.as_deref().map(str::as_bytes),
                 )
                 .map_err(|error| {
                     RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
@@ -164,6 +180,7 @@ impl RuntimeTool for ExecRuntime {
                     timeout_ms,
                     sandbox.enforced(),
                     network,
+                    stdin.as_deref().map(str::as_bytes),
                 )
                 .map_err(|error| {
                     RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())

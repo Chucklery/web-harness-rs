@@ -10,8 +10,9 @@ pub fn foreground(
     timeout_ms: Option<u64>,
     sandboxed: bool,
     network: NetworkPolicy,
+    stdin: Option<&[u8]>,
 ) -> Result<ExecResult, JobError> {
-    manager.run_foreground_with_network(workspace, argv, cwd, timeout_ms, sandboxed, network)
+    manager.run_foreground_with_network(workspace, argv, cwd, timeout_ms, sandboxed, network, stdin)
 }
 
 pub fn background(
@@ -21,6 +22,7 @@ pub fn background(
     cwd: Option<&str>,
     sandboxed: bool,
     network: NetworkPolicy,
+    stdin: Option<&[u8]>,
 ) -> Result<JobStatus, JobError> {
-    manager.start_with_network(workspace, argv, cwd, sandboxed, network)
+    manager.start_with_network(workspace, argv, cwd, sandboxed, network, stdin)
 }
