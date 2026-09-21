@@ -91,9 +91,7 @@ pub fn accept(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    process::detach_into_own_group(&mut command)
-        .map_err(|error| TunnelError::Local(error.to_string()))?;
-    let mut child = command.spawn()?;
+    let mut child = spawn_in_group(command)?;
 
     let stdout = child
         .stdout
@@ -167,6 +165,12 @@ fn terminate_child(child: &mut Child) -> Result<(), TunnelError> {
     Ok(())
 }
 
+fn spawn_in_group(mut command: Command) -> Result<Child, TunnelError> {
+    process::detach_into_own_group(&mut command)
+        .map_err(|error| TunnelError::Local(error.to_string()))?;
+    Ok(command.spawn()?)
+}
+
 fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     let binary = std::env::current_exe()?;
     let workspace_arg = workspace.root().display().to_string();
@@ -176,9 +180,7 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    process::detach_into_own_group(&mut command)
-        .map_err(|error| TunnelError::Local(error.to_string()))?;
-    let mut child = command.spawn()?;
+    let mut child = spawn_in_group(command)?;
 
     let mut stdin = child
         .stdin
