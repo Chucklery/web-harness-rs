@@ -22,32 +22,51 @@ impl RuntimeTool for ExecRuntime {
         context: &mut ExecutionContext<'_>,
         arguments: &Value,
     ) -> Result<Value, RuntimeToolError> {
-        let values = arguments
-            .get("argv")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                RuntimeToolError::new(
+        let script = arguments
+            .get("script")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let argv = match (arguments.get("argv"), script.as_deref()) {
+            (Some(_), Some(_)) | (None, None) => {
+                return Err(RuntimeToolError::new(
                     RuntimeErrorKind::InvalidArguments,
-                    "arguments.argv is required",
-                )
-            })?;
-        if values.is_empty() || values.len() > MAX_ARGV_ITEMS {
-            return Err(RuntimeToolError::new(
-                RuntimeErrorKind::InvalidArguments,
-                "argv must contain 1..=64 items",
-            ));
-        }
-        let argv = values
-            .iter()
-            .map(|value| {
-                value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    "provide exactly one of argv or script",
+                ))
+            }
+            (Some(value), None) => {
+                let values = value.as_array().ok_or_else(|| {
                     RuntimeToolError::new(
                         RuntimeErrorKind::InvalidArguments,
-                        "argv items must be strings",
+                        "arguments.argv must be an array",
                     )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                })?;
+                if values.is_empty() || values.len() > MAX_ARGV_ITEMS {
+                    return Err(RuntimeToolError::new(
+                        RuntimeErrorKind::InvalidArguments,
+                        "argv must contain 1..=64 items",
+                    ));
+                }
+                values
+                    .iter()
+                    .map(|value| {
+                        value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                            RuntimeToolError::new(
+                                RuntimeErrorKind::InvalidArguments,
+                                "argv items must be strings",
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            (None, Some(_)) => {
+                let shell = arguments
+                    .get("shell")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sh");
+                validate_script_shell(shell)?;
+                vec![shell.to_string()]
+            }
+        };
 
         let cwd = arguments.get("cwd").and_then(Value::as_str);
         let background = arguments
@@ -61,10 +80,17 @@ impl RuntimeTool for ExecRuntime {
                 "timeout_ms must be 1..=600000",
             ));
         }
-        let stdin = arguments
+        let explicit_stdin = arguments
             .get("stdin")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        if script.is_some() && explicit_stdin.is_some() {
+            return Err(RuntimeToolError::new(
+                RuntimeErrorKind::InvalidArguments,
+                "script and stdin cannot be provided together",
+            ));
+        }
+        let stdin = script.clone().or(explicit_stdin);
         if stdin
             .as_ref()
             .is_some_and(|value| value.len() > MAX_STDIN_BYTES)
@@ -113,8 +139,9 @@ impl RuntimeTool for ExecRuntime {
             expected_head: None,
             stdin: stdin.clone(),
         };
+        let script_mode = script.is_some();
         if capability.requires_approval()
-            && (capability != Capability::ProcessExecute || !sandbox.enforced())
+            && (script_mode || capability != Capability::ProcessExecute || !sandbox.enforced())
         {
             if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                 context
@@ -136,6 +163,10 @@ impl RuntimeTool for ExecRuntime {
                     Capability::NetworkOutbound => (
                         format!("Run {} with outbound network", argv.first().map(String::as_str).unwrap_or("?")),
                         "Outbound network is denied by default and requires explicit one-time approval".to_string(),
+                    ),
+                    Capability::ProcessExecute if script_mode => (
+                        "Run an approved workspace script".to_string(),
+                        "Script execution requires explicit one-time approval".to_string(),
                     ),
                     _ => (
                         format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
@@ -191,6 +222,21 @@ impl RuntimeTool for ExecRuntime {
 
         Ok(value)
     }
+}
+
+fn validate_script_shell(shell: &str) -> Result<(), RuntimeToolError> {
+    let allowed = if cfg!(windows) {
+        matches!(shell, "powershell" | "pwsh")
+    } else {
+        matches!(shell, "sh" | "bash")
+    };
+    if !allowed {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            "shell must be sh or bash on Unix, or powershell or pwsh on Windows",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -250,5 +296,20 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn script_mode_requires_explicit_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = ExecRuntime
+            .call(&mut context, &json!({"script": "printf script"}))
+            .unwrap();
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "process.execute");
     }
 }

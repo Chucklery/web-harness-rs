@@ -55,7 +55,7 @@ Applies bounded Codex-style Add File, Update File, and Delete File operations. P
 
 ## exec
 
-Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent: the command is validated before it starts, and an inline-evaluation flag (`sh -c`, `bash -c`, `python -c`, `ruby -c`) on a known shell or interpreter is rejected with a message that points at the script-file form in the workspace. This is a policy filter rather than a security boundary — `PATH` can still contain a wrapper such as `env` — so the sandbox below remains the actual boundary.
+Executes argv-based commands inside the workspace. It also provides an explicit `script` mode using the platform shell (`sh`/`bash` on Unix, `powershell`/`pwsh` on Windows); the bounded script is passed as one-shot stdin and always requires approval. Shell-string mode remains absent for argv calls: the command is validated before it starts, and an inline-evaluation flag (`sh -c`, `bash -c`, `python -c`, `ruby -c`) on a known shell or interpreter is rejected. This is a policy filter rather than a security boundary — `PATH` can still contain a wrapper such as `env` — so the sandbox below remains the actual boundary.
 
 Direct Git commands sent through exec are classified before spawn and use the same approval capabilities as structured Git: `git push` requires `git.remote.write`; every other direct Git invocation conservatively requires `git.local.write`. An approved executable or wrapper may still mutate files inside the sandboxed workspace, so approval of general process execution grants that workspace-scoped authority.
 

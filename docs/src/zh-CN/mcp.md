@@ -39,6 +39,8 @@ Job 支持 poll、有限等待、list、cancel 以及 stdout/stderr 读取。out
 
 Exec 可选接受一次性 UTF-8 `stdin`，上限 64 KiB。输入通过 Host 管理的临时文件提供给子进程，随后关闭；不提供 PTY 或交互式常驻会话，输入内容也会绑定到审批票据。
 
+Exec 还提供明确的 `script` 模式：Unix 使用 `sh`/`bash`，Windows 使用 `powershell`/`pwsh`。脚本以有界的一次性 stdin 传入，并始终要求显式审批；不会建立常驻 shell。
+
 macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区、TMPDIR、`/tmp`、`/private/tmp` 与 `/dev/null`。`/dev/null` 需要显式放行：shell、Git 以及大多数编译器与构建工具链都会无条件打开它，否则 `git status` 这类命令会直接以 `Operation not permitted` 失败。
 
 网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并且必须使用绑定确切 argv、cwd、后台模式、capability 和网络策略的一次性审批。没有原生 sandbox backend 时会拒绝该升级，不提供 unsandboxed 网络模式。
