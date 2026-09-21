@@ -189,7 +189,12 @@ fn handle(
             },
             {
                 "name": "permission",
-                "description": "Approve or deny a one-time execution approval ticket.",
+                "description": "Approve or deny a one-time execution approval ticket. Approval must be confirmed by the user through the MCP host.",
+                "annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": true,
+                    "openWorldHint": false
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -398,6 +403,12 @@ fn call_tool(
                 return Err(json!({
                     "code": -32602,
                     "message": format!("runtime tool is not exposed through the compatibility gateway: {tool}")
+                }));
+            }
+            if tool == "permission" {
+                return Err(json!({
+                    "code": -32602,
+                    "message": "permission is direct-only so MCP host confirmation cannot be bypassed"
                 }));
             }
             let forwarded = json!({

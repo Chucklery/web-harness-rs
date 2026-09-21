@@ -29,4 +29,8 @@ macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区�
 
 一次性票据绑定到精确请求，五分钟过期。票据只在授权成功时被消费；请求不匹配会报错并保留票据，因此用正确参数重试无需重新审批。Deny 会显式删除票据。
 
+`permission` 工具通过 MCP `ToolAnnotations` 声明为 destructive，因此 ChatGPT 会在审批调用到达 web-harness 前要求用户确认。该注解构成用户交互边界；进程内权限引擎继续负责服务端的精确请求绑定和一次性消费。
+
+`permission` 只能直接调用。adaptive `call_runtime_tool` 网关会拒绝转发它，防止利用网关的通用注解绕过 Host 确认。
+
 兼容控制接口不会引入第二个 Agent，它们只调用现有受限 Runtime。

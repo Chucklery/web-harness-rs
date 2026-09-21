@@ -57,6 +57,15 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
     ] {
         assert!(names.contains(&expected), "missing MCP tool: {expected}");
     }
+    let permission = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "permission")
+        .unwrap();
+    assert_eq!(permission["annotations"]["readOnlyHint"], false);
+    assert_eq!(permission["annotations"]["destructiveHint"], true);
+    assert_eq!(permission["annotations"]["openWorldHint"], false);
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
@@ -108,6 +117,13 @@ fn adaptive_runtime_control_tools_are_callable() {
             "jsonrpc":"2.0","id":5,"method":"tools/call",
             "params":{"name":"read_files","arguments":{"paths":["hello.txt"]}}
         }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":6,"method":"tools/call",
+            "params":{
+                "name":"call_runtime_tool",
+                "arguments":{"tool":"permission","arguments":{"action":"approve","id":"apr_x"}}
+            }
+        }),
     ] {
         writeln!(stdin, "{}", request).unwrap();
     }
@@ -131,6 +147,13 @@ fn adaptive_runtime_control_tools_are_callable() {
     let direct: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     let direct_text = direct["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(direct_text, routed_text);
+
+    let permission_bypass: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(permission_bypass["error"]["code"], -32602);
+    assert!(permission_bypass["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("direct-only"));
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

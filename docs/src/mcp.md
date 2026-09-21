@@ -89,6 +89,10 @@ Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbit
 
 Approves or denies one-time request-bound tickets. Tickets expire after five minutes and are consumed after one successful authorization.
 
+The tool is declared as destructive through MCP `ToolAnnotations`, so ChatGPT asks the user to confirm the approval call before it reaches web-harness. The annotation is the user-interaction boundary; the in-process permission engine remains the server-side binding and single-use boundary.
+
+`permission` is direct-only. The adaptive `call_runtime_tool` gateway rejects it so the gateway's generic annotation cannot bypass host confirmation.
+
 The same ticket cannot be reused for a different command or Git operation.
 
 A ticket that fails to match the request is *not* consumed. An approval is consumed only when it is successfully used, or when it expires. A mismatching request returns an error and leaves the still-valid approval in place, so a client that mis-specifies a command can retry with the correct payload without re-approving. Denial removes the ticket explicitly.
