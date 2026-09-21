@@ -52,22 +52,69 @@ struct Job {
     child: Child,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
-    exit_code: Option<i32>,
+    state: JobState,
+}
+
+#[derive(Clone, Copy)]
+enum JobState {
+    Running,
+    Exited(i32),
+    Cancelled(i32),
+}
+
+#[derive(Clone, Copy)]
+enum JobTransition {
+    Observe,
+    Cancel,
 }
 
 impl Job {
-    /// Marks the job as finished once the child has been reaped.
+    /// Applies the only state transition out of `Running`.
     ///
-    /// A process terminated by a signal has no exit code; jobs report `-1` for
-    /// that case instead of exposing the raw `None`. This is also the only
-    /// transition out of the running state, so `is_running` stays the single
-    /// definition of "live".
-    fn record_exit(&mut self, status: std::process::ExitStatus) {
-        self.exit_code = status.code().or(Some(-1));
+    /// The return value is true exactly once: when this call observes or
+    /// causes process completion. Callers use it to retain the job once.
+    fn transition(&mut self, transition: JobTransition) -> Result<bool, std::io::Error> {
+        if !self.is_running() {
+            return Ok(false);
+        }
+
+        let (status, cancelled) = match transition {
+            JobTransition::Observe => (self.child.try_wait()?, false),
+            JobTransition::Cancel => match self.child.try_wait()? {
+                Some(status) => (Some(status), false),
+                None => {
+                    terminate(&mut self.child)?;
+                    (Some(self.child.wait()?), true)
+                }
+            },
+        };
+        let Some(status) = status else {
+            return Ok(false);
+        };
+        let exit_code = status.code().unwrap_or(-1);
+        self.state = if cancelled {
+            JobState::Cancelled(exit_code)
+        } else {
+            JobState::Exited(exit_code)
+        };
+        Ok(true)
     }
 
     fn is_running(&self) -> bool {
-        self.exit_code.is_none()
+        matches!(self.state, JobState::Running)
+    }
+
+    fn status(&self, id: &str) -> JobStatus {
+        let (state, exit_code) = match self.state {
+            JobState::Running => ("running", None),
+            JobState::Exited(exit_code) => ("exited", Some(exit_code)),
+            JobState::Cancelled(exit_code) => ("cancelled", Some(exit_code)),
+        };
+        JobStatus {
+            id: id.to_string(),
+            state: state.into(),
+            exit_code,
+        }
     }
 
     fn remove_artifacts(&self) {
@@ -152,7 +199,7 @@ impl JobManager {
                 child: spawned.child,
                 stdout_path: spawned.artifacts.stdout.path,
                 stderr_path: spawned.artifacts.stderr.path,
-                exit_code: None,
+                state: JobState::Running,
             },
         );
         Ok(JobStatus {
@@ -163,59 +210,11 @@ impl JobManager {
     }
 
     pub fn poll(&mut self, id: &str) -> Result<JobStatus, JobError> {
-        let (state, exit_code, newly_completed) = {
-            let job = self
-                .jobs
-                .get_mut(id)
-                .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-            let was_running = job.is_running();
-            if was_running {
-                if let Some(status) = job.child.try_wait()? {
-                    job.record_exit(status);
-                }
-            }
-            (
-                if job.is_running() {
-                    "running".to_string()
-                } else {
-                    "exited".to_string()
-                },
-                job.exit_code,
-                was_running,
-            )
-        };
-        if newly_completed {
-            self.record_completed(id);
-        }
-        Ok(JobStatus {
-            id: id.to_string(),
-            state,
-            exit_code,
-        })
+        self.transition_job(id, JobTransition::Observe)
     }
 
     pub fn cancel(&mut self, id: &str) -> Result<JobStatus, JobError> {
-        let (exit_code, newly_completed) = {
-            let job = self
-                .jobs
-                .get_mut(id)
-                .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-            let was_running = job.is_running();
-            if was_running {
-                terminate(&mut job.child)?;
-                let status = job.child.wait()?;
-                job.record_exit(status);
-            }
-            (job.exit_code, was_running)
-        };
-        if newly_completed {
-            self.record_completed(id);
-        }
-        Ok(JobStatus {
-            id: id.to_string(),
-            state: "cancelled".into(),
-            exit_code,
-        })
+        self.transition_job(id, JobTransition::Cancel)
     }
 
     pub fn output(&self, id: &str, stream: &str) -> Result<(String, bool), JobError> {
@@ -233,18 +232,32 @@ impl JobManager {
     }
 
     fn refresh(&mut self) {
-        let mut completed = Vec::new();
-        for (id, job) in &mut self.jobs {
-            if job.is_running() {
-                if let Ok(Some(status)) = job.child.try_wait() {
-                    job.record_exit(status);
-                    completed.push(id.clone());
-                }
-            }
+        let ids: Vec<_> = self.jobs.keys().cloned().collect();
+        for id in ids {
+            let _ = self.transition_job(&id, JobTransition::Observe);
         }
-        for id in completed {
-            self.record_completed(&id);
+    }
+
+    fn transition_job(
+        &mut self,
+        id: &str,
+        transition: JobTransition,
+    ) -> Result<JobStatus, JobError> {
+        let completed = {
+            let job = self
+                .jobs
+                .get_mut(id)
+                .ok_or_else(|| JobError::NotFound(id.to_string()))?;
+            job.transition(transition)?
+        };
+        if completed {
+            self.record_completed(id);
         }
+        Ok(self
+            .jobs
+            .get(id)
+            .expect("transitioned job is retained")
+            .status(id))
     }
 
     /// Records a finished job and evicts the oldest completed jobs once the
@@ -351,6 +364,64 @@ mod tests {
         }
         let (output, _) = manager.output(&started.id, "stdout").unwrap();
         assert_eq!(output, "done");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_job_is_not_recorded_as_completed() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["/bin/sleep".into(), "2".into()], None, false)
+            .unwrap();
+
+        assert_eq!(manager.poll(&started.id).unwrap().state, "running");
+        assert!(manager.completed_order.is_empty());
+        assert!(manager.jobs.contains_key(&started.id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repeated_poll_records_completion_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["printf".into(), "done".into()], None, false)
+            .unwrap();
+
+        loop {
+            if manager.poll(&started.id).unwrap().state == "exited" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(manager.poll(&started.id).unwrap().state, "exited");
+        assert_eq!(
+            manager
+                .completed_order
+                .iter()
+                .filter(|id| *id == &started.id)
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_after_poll_records_completion_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["/bin/sleep".into(), "2".into()], None, false)
+            .unwrap();
+
+        assert_eq!(manager.poll(&started.id).unwrap().state, "running");
+        assert_eq!(manager.cancel(&started.id).unwrap().state, "cancelled");
+        assert_eq!(manager.poll(&started.id).unwrap().state, "cancelled");
+        assert_eq!(manager.completed_order.len(), 1);
     }
 
     #[cfg(unix)]
