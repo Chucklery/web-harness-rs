@@ -39,7 +39,7 @@ Validate the local stdio MCP contract first:
 web-harness tunnel doctor --workspace /path/to/project
 ~~~
 
-This performs initialize and tools/list roundtrips against a locally spawned web-harness server.
+This performs initialize/tools-list and bounded read-only `tools/call` roundtrips for workspace info, file listing, search, and Git status against a locally spawned web-harness server. It validates the normal tool-result envelope without modifying the configured workspace.
 
 For a real Secure MCP Tunnel acceptance run, inject the exact current official command as a JSON argv array instead of hard-coding tunnel-client flags in this repository:
 
@@ -57,4 +57,3 @@ The wrapper receives:
 It is responsible for invoking the current official Secure MCP Tunnel flow and validating the remote side. Exit code 0 marks the external acceptance step as passed.
 
 This split is deliberate: web-harness owns and verifies its local MCP contract, while the injected command tracks OpenAI's current tunnel CLI/UI without this project inventing flags that may change.
-

@@ -46,7 +46,7 @@ pub fn doctor(workspace: &Workspace) -> Result<TunnelReport, TunnelError> {
         external_exit_code: None,
         stdout_tail: None,
         stderr_tail: None,
-        note: "Local stdio MCP initialize/tools-list roundtrip passed. Configure an exact official tunnel acceptance command to test the remote tunnel.".into(),
+        note: "Local stdio MCP initialize/tools-list and bounded read-only tools/call roundtrips passed. Configure an exact official tunnel acceptance command to test the remote tunnel.".into(),
     })
 }
 
@@ -64,7 +64,7 @@ pub fn accept(
             external_exit_code: None,
             stdout_tail: None,
             stderr_tail: None,
-            note: "No external tunnel command configured. Set WEB_HARNESS_TUNNEL_COMMAND_JSON to a JSON argv array that performs the current official Secure MCP Tunnel acceptance flow.".into(),
+                note: "Local stdio MCP checks passed, but no external tunnel command is configured. Set WEB_HARNESS_TUNNEL_COMMAND_JSON to a JSON argv array that performs the current official Secure MCP Tunnel acceptance flow.".into(),
         });
     };
 
@@ -250,6 +250,35 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     )?;
     if !tools["result"]["tools"].is_array() {
         return Err(TunnelError::Local("invalid tools/list response".into()));
+    }
+
+    for (id, params) in [
+        (3, json!({"name":"workspace_info","arguments":{}})),
+        (4, json!({"name":"list_files","arguments":{"limit":1}})),
+        (
+            5,
+            json!({"name":"search","arguments":{"query":"web-harness","literal":true,"max_results":1}}),
+        ),
+        (6, json!({"name":"git","arguments":{"action":"status"}})),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params})
+        )?;
+    }
+    stdin.flush()?;
+    for expected_id in 3..=6 {
+        let response: Value = serde_json::from_str(
+            &lines
+                .next()
+                .ok_or_else(|| TunnelError::Local("missing tools/call response".into()))??,
+        )?;
+        if response["id"] != expected_id || !response["result"]["content"].is_array() {
+            return Err(TunnelError::Local(
+                "invalid tools/call result envelope".into(),
+            ));
+        }
     }
 
     drop(stdin);
