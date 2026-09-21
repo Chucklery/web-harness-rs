@@ -1,6 +1,7 @@
 use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::env;
+use crate::path_policy;
 use crate::permission::Capability;
 use serde_json::{json, Value};
 use std::fs;
@@ -157,9 +158,10 @@ fn tracked_entries(
         .filter(|path| !path.is_empty())
         .filter_map(|path| std::str::from_utf8(path).ok())
         .filter(|path| {
-            include
-                .map(|pattern| glob_matches(pattern, path))
-                .unwrap_or(true)
+            !path_policy::is_protected(path)
+                && include
+                    .map(|pattern| glob_matches(pattern, path))
+                    .unwrap_or(true)
         })
         .filter_map(|path| entry_for_relative(context, path).ok())
         .collect::<Vec<_>>();
@@ -204,9 +206,10 @@ fn all_entries(
             } else {
                 FileKind::File
             };
-            if include
-                .map(|pattern| glob_matches(pattern, &relative_text))
-                .unwrap_or(true)
+            if !path_policy::is_protected(&relative_text)
+                && include
+                    .map(|pattern| glob_matches(pattern, &relative_text))
+                    .unwrap_or(true)
             {
                 if context.workspace().resolve(&relative_text).is_ok() {
                     entries.push(Entry {

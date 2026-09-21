@@ -1,6 +1,7 @@
 use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::git::{self, GitError};
+use crate::path_policy;
 use crate::permission::{Capability, ExecAuthorization};
 use crate::sandbox::NetworkPolicy;
 use serde_json::{json, Value};
@@ -62,10 +63,53 @@ impl RuntimeTool for GitRuntime {
             .transpose()?;
 
         match risk {
-            GitRisk::ReadOnly => context
-                .permissions()
-                .authorize(Capability::GitRead)
-                .map_err(permission_error)?,
+            GitRisk::ReadOnly => {
+                let protected_read = action == "show_file"
+                    && pathspec
+                        .first()
+                        .is_some_and(|path| path_policy::is_protected(path));
+                if protected_read {
+                    let path = pathspec.first().expect("protected_read has a path");
+                    let revision = arguments
+                        .get("revision")
+                        .and_then(Value::as_str)
+                        .unwrap_or("HEAD");
+                    let authorization = ExecAuthorization {
+                        capability: Capability::WorkspaceSensitiveRead,
+                        argv: vec!["git".into(), "show".into(), format!("{revision}:{path}")],
+                        cwd: Some(".".into()),
+                        background: false,
+                        network: NetworkPolicy::Deny,
+                        expected_head: None,
+                        stdin: None,
+                        protected_read: true,
+                    };
+                    if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str)
+                    {
+                        context
+                            .permissions()
+                            .consume_exec(approval_id, &authorization)
+                            .map_err(permission_error)?;
+                    } else {
+                        let approval = context.permissions().request_action(
+                            &authorization,
+                            "Read a protected Git revision file".into(),
+                            "Sensitive paths require explicit one-time user approval".into(),
+                        );
+                        return Ok(json!({
+                            "status": "approval_required",
+                            "approval": approval,
+                            "capability": Capability::WorkspaceSensitiveRead.as_str(),
+                            "protected_paths": [path]
+                        }));
+                    }
+                } else {
+                    context
+                        .permissions()
+                        .authorize(Capability::GitRead)
+                        .map_err(permission_error)?;
+                }
+            }
             GitRisk::LocalWrite | GitRisk::RemoteWrite => {
                 let capability = if risk == GitRisk::RemoteWrite {
                     Capability::GitRemoteWrite
@@ -83,6 +127,7 @@ impl RuntimeTool for GitRuntime {
                     network: NetworkPolicy::Deny,
                     expected_head: expected_head.clone(),
                     stdin: None,
+                    protected_read: false,
                 };
                 if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                     context

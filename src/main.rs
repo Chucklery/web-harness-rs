@@ -15,6 +15,7 @@ mod maintenance;
 mod mcp;
 mod onboarding;
 mod patch;
+mod path_policy;
 mod permission;
 mod process;
 mod redact;

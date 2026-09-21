@@ -24,7 +24,7 @@ MCP 传输层开始与本地工具执行解耦。MCP 层只负责协议解析、
 
 Runtime 调用统一接收 `ExecutionContext`，其中包含工作区边界、Sandbox 后端、权限引擎、资源限制、非敏感平台信息以及 Job manager。安全与资源策略不再由每个 MCP handler 重复处理。
 
-权限模型使用显式 Capability，例如 `workspace.read`、`workspace.write`、`process.execute`、`job.control`、`git.read`、`git.local.write` 与 `git.remote.write`。一次性审批票据同时绑定 Capability 与精确命令参数，不能把低权限审批复用于更高权限操作。
+权限模型使用显式 Capability，例如 `workspace.read`、`workspace.sensitive.read`、`workspace.write`、`process.execute`、`job.control`、`git.read`、`git.local.write` 与 `git.remote.write`。一次性审批票据同时绑定 Capability 与精确命令参数，不能把低权限审批复用于更高权限操作。
 
 执行网络策略也属于同一个审批摘要。默认策略是 deny；仅出站的 Seatbelt profile 需要独立的一次性审批，没有原生 backend 时拒绝该升级，而不是静默运行未沙箱化的网络命令。
 

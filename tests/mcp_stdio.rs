@@ -174,11 +174,11 @@ fn stdio_mcp_batches_search_queries_with_one_result_budget() {
     std::fs::write(
         &rg_path,
         r#"#!/bin/sh
-case "$6" in
-  needle-alpha)
+case " $* " in
+  *" needle-alpha "*)
     printf '%s\n' '{"type":"match","data":{"path":{"text":"./alpha.txt"},"lines":{"text":"needle-alpha\n"},"line_number":1}}'
     ;;
-  needle-beta)
+  *" needle-beta "*)
     printf '%s\n' '{"type":"match","data":{"path":{"text":"./beta.txt"},"lines":{"text":"needle-beta\n"},"line_number":1}}'
     ;;
 esac

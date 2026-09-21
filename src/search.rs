@@ -1,5 +1,6 @@
 use crate::command_output;
 use crate::env;
+use crate::path_policy;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
@@ -123,6 +124,9 @@ pub fn search(
     }
     for exclude in &options.exclude {
         command.args(["--glob", &format!("!{exclude}")]);
+    }
+    for exclude in path_policy::PROTECTED_GLOBS {
+        command.args(["--glob", exclude]);
     }
     command
         .arg("--")

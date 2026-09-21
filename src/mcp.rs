@@ -90,7 +90,7 @@ fn handle(
                 "description": "Read UTF-8 files inside the workspace with bounded size.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"paths": {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "expected_read_revision": {"type": "string", "maxLength": 128}}, "required": ["path"], "additionalProperties": false}]}, "minItems": 1, "maxItems": 16}},
+                    "properties": {"paths": {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "expected_read_revision": {"type": "string", "maxLength": 128}}, "required": ["path"], "additionalProperties": false}]}, "minItems": 1, "maxItems": 16}, "approval_id": {"type": "string"}},
                     "required": ["paths"],
                     "additionalProperties": false
                 }

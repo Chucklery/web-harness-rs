@@ -51,7 +51,7 @@ This boundary adds no second process, model loop, daemon, or database. Its only 
 
 Runtime calls receive one `ExecutionContext` containing the workspace boundary, sandbox backend, permission engine, bounded limits, non-secret platform metadata, and Job manager access. This keeps security and resource policy out of individual MCP handlers.
 
-Permissions use explicit capabilities such as `workspace.read`, `workspace.write`, `process.execute`, `job.control`, `git.read`, `git.local.write`, and `git.remote.write`. Approval tickets are cryptographically bound to the requested capability as well as the exact command payload, so an approval cannot be replayed for a stronger capability.
+Permissions use explicit capabilities such as `workspace.read`, `workspace.sensitive.read`, `workspace.write`, `process.execute`, `job.control`, `git.read`, `git.local.write`, and `git.remote.write`. Approval tickets are cryptographically bound to the requested capability as well as the exact command payload, so an approval cannot be replayed for a stronger capability.
 
 Ticket consumption happens only on a successful authorization. Expiry invalidates a ticket; denial removes it explicitly. A mismatching request — wrong capability, wrong argv, wrong cwd, or wrong background mode — fails without consuming the ticket, because a rejected request has not used the approval it was issued for. A retry with the correct payload therefore still succeeds within the five-minute window.
 

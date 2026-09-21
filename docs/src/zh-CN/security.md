@@ -7,4 +7,4 @@
 - 命令执行控制
 - 敏感操作确认
 
-当前未实现针对 `.env`、私钥和凭据文件的统一 protected-path 分类及逐次读取授权；实际边界仍依赖配置的 deny paths、sandbox 和输出脱敏。真实生产 Secure MCP Tunnel 验收证据也仍待补齐。
+当前已为常见 `.env`、私钥和凭据文件提供统一 protected-path 分类：直接文件读取、列表/搜索过滤、Git revision 文件读取和可识别的 exec 路径参数会要求一次性审批。任意脚本仍由显式脚本审批和 OS sandbox 约束，启发式分类不能覆盖所有可能的命令。真实生产 Secure MCP Tunnel 验收证据也仍待补齐。

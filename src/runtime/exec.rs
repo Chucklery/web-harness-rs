@@ -2,6 +2,7 @@ use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::command_policy::{self, CommandRisk};
 use crate::exec;
+use crate::path_policy;
 use crate::permission::{Capability, ExecAuthorization};
 use crate::sandbox::NetworkPolicy;
 use serde_json::{json, Value};
@@ -130,6 +131,9 @@ impl RuntimeTool for ExecRuntime {
             (None, NetworkPolicy::Outbound) => Capability::NetworkOutbound,
             (None, NetworkPolicy::Deny) => Capability::ProcessExecute,
         };
+        let protected_read = argv.iter().skip(1).any(|argument| {
+            path_policy::is_protected(argument) && context.workspace().resolve(argument).is_ok()
+        });
         let authorization = ExecAuthorization {
             capability,
             argv: argv.clone(),
@@ -138,10 +142,14 @@ impl RuntimeTool for ExecRuntime {
             network,
             expected_head: None,
             stdin: stdin.clone(),
+            protected_read,
         };
         let script_mode = script.is_some();
         if capability.requires_approval()
-            && (script_mode || capability != Capability::ProcessExecute || !sandbox.enforced())
+            && (script_mode
+                || protected_read
+                || capability != Capability::ProcessExecute
+                || !sandbox.enforced())
         {
             if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                 context
@@ -167,6 +175,10 @@ impl RuntimeTool for ExecRuntime {
                     Capability::ProcessExecute if script_mode => (
                         "Run an approved workspace script".to_string(),
                         "Script execution requires explicit one-time approval".to_string(),
+                    ),
+                    Capability::ProcessExecute if protected_read => (
+                        "Read a protected workspace path through exec".to_string(),
+                        "Protected paths require explicit one-time approval".to_string(),
                     ),
                     _ => (
                         format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
@@ -308,6 +320,22 @@ mod tests {
 
         let result = ExecRuntime
             .call(&mut context, &json!({"script": "printf script"}))
+            .unwrap();
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "process.execute");
+    }
+
+    #[test]
+    fn direct_exec_reading_existing_protected_path_requires_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = ExecRuntime
+            .call(&mut context, &json!({"argv": ["cat", ".env"]}))
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "process.execute");

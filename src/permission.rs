@@ -12,6 +12,7 @@ const TICKET_TTL: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
     WorkspaceRead,
+    WorkspaceSensitiveRead,
     WorkspaceWrite,
     ProcessExecute,
     JobControl,
@@ -25,6 +26,7 @@ impl Capability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceRead => "workspace.read",
+            Self::WorkspaceSensitiveRead => "workspace.sensitive.read",
             Self::WorkspaceWrite => "workspace.write",
             Self::ProcessExecute => "process.execute",
             Self::JobControl => "job.control",
@@ -38,7 +40,8 @@ impl Capability {
     pub fn requires_approval(self) -> bool {
         matches!(
             self,
-            Self::ProcessExecute
+            Self::WorkspaceSensitiveRead
+                | Self::ProcessExecute
                 | Self::GitLocalWrite
                 | Self::GitRemoteWrite
                 | Self::NetworkOutbound
@@ -55,6 +58,7 @@ pub struct ExecAuthorization {
     pub network: NetworkPolicy,
     pub expected_head: Option<String>,
     pub stdin: Option<String>,
+    pub protected_read: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,6 +209,7 @@ impl PermissionEngine {
             }
             None => hasher.update([0]),
         }
+        hasher.update([request.protected_read as u8]);
         hasher.finalize().into()
     }
 
@@ -227,6 +232,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             expected_head: None,
             stdin: None,
+            protected_read: false,
         }
     }
 
@@ -290,6 +296,21 @@ mod tests {
 
         let mut changed = request.clone();
         changed.stdin = Some("second".into());
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &changed),
+            Err(PermissionError::Mismatch)
+        ));
+    }
+
+    #[test]
+    fn approval_is_bound_to_protected_read_state() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut request = request(&["cat", ".env"]);
+        request.protected_read = true;
+        let ticket = request_ticket(&mut engine, &request);
+        engine.approve(&ticket.id).unwrap();
+        let mut changed = request.clone();
+        changed.protected_read = false;
         assert!(matches!(
             engine.consume_exec(&ticket.id, &changed),
             Err(PermissionError::Mismatch)

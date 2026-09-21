@@ -1,6 +1,9 @@
 use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
+use crate::path_policy;
 use crate::permission::Capability;
+use crate::permission::ExecAuthorization;
+use crate::sandbox::NetworkPolicy;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -48,10 +51,43 @@ impl RuntimeTool for FileRuntime {
             return Err(invalid("paths must contain 1..=16 items"));
         }
 
+        let requests = values
+            .iter()
+            .map(parse_request)
+            .collect::<Result<Vec<_>, _>>()?;
+        if requests
+            .iter()
+            .any(|request| path_policy::is_protected(&request.path))
+        {
+            let authorization = sensitive_read_authorization(&requests);
+            if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
+                context
+                    .permissions()
+                    .consume_exec(approval_id, &authorization)
+                    .map_err(permission_error)?;
+            } else {
+                let protected_paths = requests
+                    .iter()
+                    .filter(|request| path_policy::is_protected(&request.path))
+                    .map(|request| request.path.clone())
+                    .collect::<Vec<_>>();
+                let approval = context.permissions().request_action(
+                    &authorization,
+                    "Read protected workspace files".into(),
+                    "Sensitive paths require explicit one-time user approval".into(),
+                );
+                return Ok(json!({
+                    "status": "approval_required",
+                    "approval": approval,
+                    "capability": Capability::WorkspaceSensitiveRead.as_str(),
+                    "protected_paths": protected_paths
+                }));
+            }
+        }
+
         let mut total = 0usize;
         let mut files = Vec::with_capacity(values.len());
-        for value in values {
-            let request = parse_request(value)?;
+        for request in &requests {
             let read = read_range(context, &request, limits.max_read_file_bytes)?;
             total = total.checked_add(read.text.len()).ok_or_else(|| {
                 RuntimeToolError::new(
@@ -86,6 +122,30 @@ impl RuntimeTool for FileRuntime {
             }));
         }
         Ok(json!({"files": files}))
+    }
+}
+
+fn sensitive_read_authorization(requests: &[ReadRequest]) -> ExecAuthorization {
+    let mut argv = vec!["read_files".to_string()];
+    for request in requests {
+        argv.push(request.path.clone());
+        argv.push(request.start_line.to_string());
+        argv.push(
+            request
+                .end_line
+                .map_or_else(|| "-".into(), |line| line.to_string()),
+        );
+        argv.push(request.expected_revision.clone().unwrap_or_default());
+    }
+    ExecAuthorization {
+        capability: Capability::WorkspaceSensitiveRead,
+        argv,
+        cwd: Some(".".into()),
+        background: false,
+        network: NetworkPolicy::Deny,
+        expected_head: None,
+        stdin: None,
+        protected_read: false,
     }
 }
 
@@ -279,5 +339,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value["files"][0]["text"], "alpha");
+    }
+
+    #[test]
+    fn protected_reads_require_and_consume_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let request = json!({"paths": [".env"]});
+        let pending = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &request,
+            )
+            .unwrap();
+        assert_eq!(pending["status"], "approval_required");
+        let approval_id = pending["approval"]["id"].as_str().unwrap().to_string();
+        permissions.approve(&approval_id).unwrap();
+
+        let mut approved = request.as_object().unwrap().clone();
+        approved.insert("approval_id".into(), Value::String(approval_id));
+        let value = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &Value::Object(approved),
+            )
+            .unwrap();
+        assert_eq!(value["files"][0]["text"], "TOKEN=secret\n");
     }
 }

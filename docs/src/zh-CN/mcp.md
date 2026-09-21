@@ -17,6 +17,8 @@ web-harness 保持较小的工具集合，避免暴露过大的执行面。
 
 `read_files` 保留字符串路径的兼容格式，也支持带 `start_line`、`end_line` 和 `expected_read_revision` 的对象路径。结果返回有界 `read_revision`；截断结果提供可直接续读的参数，文件版本变化时会以 Conflict 拒绝续读。
 
+常见 protected path（`.env`、私钥、凭据等）会先返回一次性审批票据；Host 确认后，使用 `approval_id` 重试读取。
+
 ## 搜索
 
 使用系统中已安装的 ripgrep，这是唯一的运行时外部依赖。Homebrew 安装会自动带上 ripgrep；手动解压 Release 包的用户需要自行安装（`brew install ripgrep` / `apt install ripgrep`）。当 `PATH` 中找不到 `rg` 时，Search 会返回一条指明 ripgrep 及安装方式的依赖错误，其余工具不受影响。
