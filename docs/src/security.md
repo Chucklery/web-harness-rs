@@ -49,6 +49,7 @@ The current pre-1.0 boundary still has known limits:
 - non-macOS platforms do not yet have a native sandbox backend and therefore rely on explicit approvals
 - secret redaction is heuristic and cannot recognize every possible secret format
 - broader sandbox compatibility testing is still needed across more developer toolchains and shell compositions
+- protected-path classification for `.env`, private-key, and credential files, plus per-read user authorization, is not implemented yet; the current boundary relies on configured deny paths, sandboxing, and output redaction
 - real production Secure MCP Tunnel acceptance evidence remains outstanding
 
 Do not treat pre-1.0 as a universally hardened remote-execution boundary across every platform and toolchain.
