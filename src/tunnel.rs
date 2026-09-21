@@ -1,10 +1,11 @@
 use crate::command_output;
+use crate::process;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -81,15 +82,18 @@ pub fn accept(
         "--workspace",
         workspace.root().display().to_string()
     ]);
-    let mut child = Command::new(&argv[0])
+    let mut command = Command::new(&argv[0]);
+    command
         .args(&argv[1..])
         .env("WEB_HARNESS_SERVER_BIN", &current_exe)
         .env("WEB_HARNESS_SERVER_ARGS_JSON", server_args.to_string())
         .env("WEB_HARNESS_WORKSPACE", workspace.root())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    process::detach_into_own_group(&mut command)
+        .map_err(|error| TunnelError::Local(error.to_string()))?;
+    let mut child = command.spawn()?;
 
     let stdout = child
         .stdout
@@ -110,7 +114,7 @@ pub fn accept(
             break status;
         }
         if start.elapsed() >= EXTERNAL_TIMEOUT {
-            child.kill()?;
+            terminate_child(&mut child)?;
             let _ = child.wait();
             let stdout = stdout_reader
                 .join()
@@ -154,15 +158,27 @@ pub fn accept(
     })
 }
 
+fn terminate_child(child: &mut Child) -> Result<(), TunnelError> {
+    if let Err(error) = process::terminate_process_group(child.id()) {
+        if child.try_wait()?.is_none() {
+            return Err(TunnelError::Local(error.to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     let binary = std::env::current_exe()?;
     let workspace_arg = workspace.root().display().to_string();
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(["serve", "--stdio", "--workspace", &workspace_arg])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    process::detach_into_own_group(&mut command)
+        .map_err(|error| TunnelError::Local(error.to_string()))?;
+    let mut child = command.spawn()?;
 
     let mut stdin = child
         .stdin
