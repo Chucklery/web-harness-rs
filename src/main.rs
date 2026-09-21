@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod atomic_file;
+mod command_output;
 mod command_policy;
 mod config;
 mod env;

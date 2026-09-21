@@ -1,8 +1,9 @@
+use crate::command_output;
 use crate::env;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use thiserror::Error;
 
 const MAX_OUTPUT: usize = 512 * 1024;
@@ -272,29 +273,29 @@ fn run_owned(workspace: &Workspace, args: &[String]) -> Result<GitResult, GitErr
 
 fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
     let mut command = Command::new("git");
-    command.args(args).current_dir(workspace.root());
+    command
+        .args(args)
+        .current_dir(workspace.root())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     env::apply(&mut command);
-    let output = command.output().map_err(|error| {
+    let child = command.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             GitError::Unavailable
         } else {
             GitError::Failed(error.to_string())
         }
     })?;
+    let output = command_output::collect(child, MAX_OUTPUT, 64 * 1024)
+        .map_err(|error| GitError::Failed(error.to_string()))?;
     if !output.status.success() {
         return Err(GitError::Failed(redact::text(
             String::from_utf8_lossy(&output.stderr).trim(),
         )));
     }
-    let mut bytes = output.stdout;
-    let truncated = bytes.len() > MAX_OUTPUT;
-    if truncated {
-        bytes.truncate(MAX_OUTPUT);
-    }
-    let mut stderr = output.stderr;
-    if stderr.len() > 64 * 1024 {
-        stderr.truncate(64 * 1024);
-    }
+    let bytes = output.stdout;
+    let truncated = output.stdout_truncated || output.stderr_truncated;
+    let stderr = output.stderr;
     Ok(GitResult {
         stdout: redact::text(&String::from_utf8_lossy(&bytes)),
         stderr: redact::text(&String::from_utf8_lossy(&stderr)),

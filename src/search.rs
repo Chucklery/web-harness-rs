@@ -1,8 +1,9 @@
+use crate::command_output;
 use crate::env;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -124,17 +125,20 @@ pub fn search(
         .arg(query)
         .arg(&options.scope)
         .current_dir(workspace.root());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     // Search runs outside the execution sandbox, but it must still start from a
     // bounded environment: an inherited `RIPGREP_CONFIG_PATH` or credential
     // variable would otherwise reach the child unfiltered.
     env::apply(&mut command);
-    let output = command.output().map_err(|error| {
+    let child = command.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             SearchError::RipgrepUnavailable
         } else {
             SearchError::Failed(error.to_string())
         }
     })?;
+    let output = command_output::collect(child, 2 * 1024 * 1024, 64 * 1024)
+        .map_err(|error| SearchError::Failed(error.to_string()))?;
 
     if !output.status.success() && output.status.code() != Some(1) {
         return Err(SearchError::Failed(redact::text(
@@ -147,7 +151,7 @@ pub fn search(
         matches: Vec::new(),
         files: Vec::new(),
         counts: Vec::new(),
-        truncated: false,
+        truncated: output.stdout_truncated || output.stderr_truncated,
     };
     match options.mode {
         SearchMode::Matches => result.matches = parse_matches(&stdout, max_results),
