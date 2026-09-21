@@ -45,6 +45,8 @@ The existing `search` tool supports either one `query` or a `queries` batch of 1
 
 Search also accepts a workspace-relative `scope`, literal mode, bounded include/exclude globs, and `matches`, `files_with_matches`, or `count` output modes. It continues to invoke the system ripgrep process per request and does not maintain an index.
 
+Single-query searches accept an `offset` continuation and return `next_offset`; keep the query, scope, glob filters, mode, and result limit unchanged when continuing. If ripgrep output itself reaches its hard bound, the result is marked truncated without a continuation.
+
 ## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.

@@ -51,6 +51,7 @@ pub struct SearchOptions {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
     pub mode: SearchMode,
+    pub offset: usize,
 }
 
 impl Default for SearchOptions {
@@ -61,6 +62,7 @@ impl Default for SearchOptions {
             include: Vec::new(),
             exclude: Vec::new(),
             mode: SearchMode::Matches,
+            offset: 0,
         }
     }
 }
@@ -77,6 +79,8 @@ pub struct SearchOutput {
     pub files: Vec<String>,
     pub counts: Vec<SearchCount>,
     pub truncated: bool,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
 }
 
 pub fn content_search(
@@ -152,19 +156,33 @@ pub fn search(
         files: Vec::new(),
         counts: Vec::new(),
         truncated: output.stdout_truncated || output.stderr_truncated,
+        offset: options.offset,
+        next_offset: None,
     };
     match options.mode {
-        SearchMode::Matches => result.matches = parse_matches(&stdout, max_results),
+        SearchMode::Matches => {
+            let (matches, more) = parse_matches(&stdout, max_results, options.offset);
+            result.matches = matches;
+            if more && !output.stdout_truncated {
+                result.next_offset = Some(options.offset + result.matches.len());
+            }
+        }
         SearchMode::FilesWithMatches => {
             result.files = stdout
                 .lines()
-                .take(max_results)
+                .skip(options.offset)
+                .take(max_results + 1)
                 .map(|path| path.to_string())
                 .collect();
-            result.truncated = stdout.lines().count() > max_results;
+            if result.files.len() > max_results {
+                result.files.truncate(max_results);
+                if !output.stdout_truncated {
+                    result.next_offset = Some(options.offset + result.files.len());
+                }
+            }
         }
         SearchMode::Count => {
-            for line in stdout.lines().take(max_results) {
+            for line in stdout.lines().skip(options.offset).take(max_results + 1) {
                 let Some((path, count)) = line.rsplit_once(':') else {
                     continue;
                 };
@@ -175,9 +193,15 @@ pub fn search(
                     });
                 }
             }
-            result.truncated = stdout.lines().count() > max_results;
+            if result.counts.len() > max_results {
+                result.counts.truncate(max_results);
+                if !output.stdout_truncated {
+                    result.next_offset = Some(options.offset + result.counts.len());
+                }
+            }
         }
     }
+    result.truncated |= result.next_offset.is_some();
     Ok(result)
 }
 
@@ -185,14 +209,24 @@ pub fn search(
 ///
 /// Split out from [`content_search`] so the redaction of matched text can be
 /// tested without requiring ripgrep to be installed.
-fn parse_matches(stdout: &str, max_results: usize) -> Vec<SearchMatch> {
+fn parse_matches(stdout: &str, max_results: usize, offset: usize) -> (Vec<SearchMatch>, bool) {
     let mut matches = Vec::new();
+    let mut seen = 0;
+    let mut more = false;
     for line in stdout.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         if value.get("type").and_then(|value| value.as_str()) != Some("match") {
             continue;
+        }
+        if seen < offset {
+            seen += 1;
+            continue;
+        }
+        if matches.len() >= max_results {
+            more = true;
+            break;
         }
         let data = &value["data"];
         matches.push(SearchMatch {
@@ -213,11 +247,9 @@ fn parse_matches(stdout: &str, max_results: usize) -> Vec<SearchMatch> {
             .take(2000)
             .collect(),
         });
-        if matches.len() >= max_results {
-            break;
-        }
+        seen += 1;
     }
-    matches
+    (matches, more)
 }
 
 #[cfg(test)]
@@ -257,7 +289,7 @@ mod tests {
             match_line("a.txt", 3, "API_KEY=abc123\n"),
             match_line("b.txt", 9, "Authorization: Bearer topsecret\n"),
         );
-        let matches = parse_matches(&stdout, 10);
+        let (matches, _) = parse_matches(&stdout, 10, 0);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].path, "a.txt");
         assert_eq!(matches[0].line, 3);
@@ -271,7 +303,7 @@ mod tests {
             "{{\"type\":\"begin\"}}\nnot json\n{}\n{{\"type\":\"summary\"}}\n",
             match_line("a.txt", 1, "needle\n"),
         );
-        let matches = parse_matches(&stdout, 10);
+        let (matches, _) = parse_matches(&stdout, 10, 0);
         assert_eq!(matches.len(), 1);
     }
 
@@ -281,7 +313,18 @@ mod tests {
             .map(|n| match_line("a.txt", n, "needle\n"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(parse_matches(&stdout, 5).len(), 5);
+        assert_eq!(parse_matches(&stdout, 5, 0).0.len(), 5);
+    }
+
+    #[test]
+    fn match_continuation_skips_previous_results() {
+        let stdout = (1..=3)
+            .map(|n| match_line("a.txt", n, "needle\n"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (matches, more) = parse_matches(&stdout, 1, 1);
+        assert_eq!(matches[0].line, 2);
+        assert!(more);
     }
 
     #[test]

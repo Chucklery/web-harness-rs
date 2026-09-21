@@ -48,6 +48,12 @@ impl RuntimeTool for SearchRuntime {
 
         let options = parse_options(arguments)?;
 
+        if queries.is_some() && options.offset != 0 {
+            return Err(invalid(
+                "offset continuation is supported only for one query",
+            ));
+        }
+
         if let Some(query) = query {
             validate_query(query)?;
             return output_value(
@@ -88,6 +94,8 @@ impl RuntimeTool for SearchRuntime {
                     files: Vec::new(),
                     counts: Vec::new(),
                     truncated: false,
+                    offset: 0,
+                    next_offset: None,
                 }
             } else {
                 search::search(context.workspace(), query, per_query_limit, &options)
@@ -99,7 +107,7 @@ impl RuntimeTool for SearchRuntime {
                 search::SearchMode::Count => matches.counts.len(),
             };
             remaining_results = remaining_results.saturating_sub(result_count);
-            results.push(json!({"query": query, "matches": matches.matches, "files": matches.files, "counts": matches.counts, "truncated": matches.truncated}));
+            results.push(json!({"query": query, "matches": matches.matches, "files": matches.files, "counts": matches.counts, "truncated": matches.truncated, "offset": matches.offset, "next_offset": matches.next_offset}));
         }
 
         Ok(json!({"results": results}))
@@ -123,6 +131,10 @@ fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeTool
     };
     let include = parse_globs(arguments.get("include"))?;
     let exclude = parse_globs(arguments.get("exclude"))?;
+    let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0);
+    if offset > 100_000 {
+        return Err(invalid("offset must be at most 100000"));
+    }
     Ok(search::SearchOptions {
         literal: arguments
             .get("literal")
@@ -136,6 +148,7 @@ fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeTool
         include,
         exclude,
         mode,
+        offset: offset as usize,
     })
 }
 
@@ -168,14 +181,25 @@ fn output_value(
     mode: search::SearchMode,
 ) -> Result<Value, RuntimeToolError> {
     match mode {
-        search::SearchMode::Matches => serde_json::to_value(json!({"matches": output.matches}))
-            .map_err(|error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())),
-        search::SearchMode::FilesWithMatches => {
-            Ok(json!({"files": output.files, "truncated": output.truncated}))
-        }
-        search::SearchMode::Count => {
-            Ok(json!({"counts": output.counts, "truncated": output.truncated}))
-        }
+        search::SearchMode::Matches => serde_json::to_value(json!({
+            "matches": output.matches,
+            "offset": output.offset,
+            "next_offset": output.next_offset,
+            "truncated": output.truncated
+        }))
+        .map_err(|error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())),
+        search::SearchMode::FilesWithMatches => Ok(json!({
+            "files": output.files,
+            "offset": output.offset,
+            "next_offset": output.next_offset,
+            "truncated": output.truncated
+        })),
+        search::SearchMode::Count => Ok(json!({
+            "counts": output.counts,
+            "offset": output.offset,
+            "next_offset": output.next_offset,
+            "truncated": output.truncated
+        })),
     }
 }
 
