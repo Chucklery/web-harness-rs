@@ -43,6 +43,8 @@ ripgrep is an external runtime dependency, not a bundled one. When `rg` is missi
 
 The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
 
+Search also accepts a workspace-relative `scope`, literal mode, bounded include/exclude globs, and `matches`, `files_with_matches`, or `count` output modes. It continues to invoke the system ripgrep process per request and does not maintain an index.
+
 ## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.

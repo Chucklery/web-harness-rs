@@ -5,6 +5,7 @@ use crate::search::{self, SearchError};
 use serde_json::{json, Value};
 
 const MAX_QUERY_BYTES: usize = 1024;
+const MAX_GLOBS: usize = 16;
 
 pub struct SearchRuntime;
 
@@ -45,11 +46,15 @@ impl RuntimeTool for SearchRuntime {
             ));
         }
 
+        let options = parse_options(arguments)?;
+
         if let Some(query) = query {
             validate_query(query)?;
-            let matches = search::content_search(context.workspace(), query, max_results)
-                .map_err(search_error)?;
-            return Ok(json!({"matches": matches}));
+            return output_value(
+                search::search(context.workspace(), query, max_results, &options)
+                    .map_err(search_error)?,
+                options.mode,
+            );
         }
 
         let queries = queries.expect("query shape validated above");
@@ -78,16 +83,99 @@ impl RuntimeTool for SearchRuntime {
             let remaining_queries = parsed.len() - index;
             let per_query_limit = remaining_results.div_ceil(remaining_queries);
             let matches = if per_query_limit == 0 {
-                Vec::new()
+                search::SearchOutput {
+                    matches: Vec::new(),
+                    files: Vec::new(),
+                    counts: Vec::new(),
+                    truncated: false,
+                }
             } else {
-                search::content_search(context.workspace(), query, per_query_limit)
+                search::search(context.workspace(), query, per_query_limit, &options)
                     .map_err(search_error)?
             };
-            remaining_results = remaining_results.saturating_sub(matches.len());
-            results.push(json!({"query": query, "matches": matches}));
+            let result_count = match options.mode {
+                search::SearchMode::Matches => matches.matches.len(),
+                search::SearchMode::FilesWithMatches => matches.files.len(),
+                search::SearchMode::Count => matches.counts.len(),
+            };
+            remaining_results = remaining_results.saturating_sub(result_count);
+            results.push(json!({"query": query, "matches": matches.matches, "files": matches.files, "counts": matches.counts, "truncated": matches.truncated}));
         }
 
         Ok(json!({"results": results}))
+    }
+}
+
+fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeToolError> {
+    let mode = match arguments
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("matches")
+    {
+        "matches" => search::SearchMode::Matches,
+        "files_with_matches" => search::SearchMode::FilesWithMatches,
+        "count" => search::SearchMode::Count,
+        _ => {
+            return Err(invalid(
+                "mode must be matches, files_with_matches, or count",
+            ))
+        }
+    };
+    let include = parse_globs(arguments.get("include"))?;
+    let exclude = parse_globs(arguments.get("exclude"))?;
+    Ok(search::SearchOptions {
+        literal: arguments
+            .get("literal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        scope: arguments
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or(".")
+            .to_string(),
+        include,
+        exclude,
+        mode,
+    })
+}
+
+fn parse_globs(value: Option<&Value>) -> Result<Vec<String>, RuntimeToolError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid("glob filters must be arrays"))?;
+    if values.len() > MAX_GLOBS {
+        return Err(invalid("at most 16 include/exclude globs are allowed"));
+    }
+    values
+        .iter()
+        .map(|value| {
+            let glob = value
+                .as_str()
+                .ok_or_else(|| invalid("glob filters must contain strings"))?;
+            if glob.is_empty() || glob.len() > 256 {
+                return Err(invalid("glob must contain 1..=256 bytes"));
+            }
+            Ok(glob.to_string())
+        })
+        .collect()
+}
+
+fn output_value(
+    output: search::SearchOutput,
+    mode: search::SearchMode,
+) -> Result<Value, RuntimeToolError> {
+    match mode {
+        search::SearchMode::Matches => serde_json::to_value(json!({"matches": output.matches}))
+            .map_err(|error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())),
+        search::SearchMode::FilesWithMatches => {
+            Ok(json!({"files": output.files, "truncated": output.truncated}))
+        }
+        search::SearchMode::Count => {
+            Ok(json!({"counts": output.counts, "truncated": output.truncated}))
+        }
     }
 }
 
@@ -109,6 +197,10 @@ fn validate_query(query: &str) -> Result<(), RuntimeToolError> {
         ));
     }
     Ok(())
+}
+
+fn invalid(message: impl Into<String>) -> RuntimeToolError {
+    RuntimeToolError::new(RuntimeErrorKind::InvalidArguments, message)
 }
 
 #[cfg(test)]

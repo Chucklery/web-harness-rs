@@ -21,6 +21,8 @@ web-harness 保持较小的工具集合，避免暴露过大的执行面。
 
 使用系统中已安装的 ripgrep，这是唯一的运行时外部依赖。Homebrew 安装会自动带上 ripgrep；手动解压 Release 包的用户需要自行安装（`brew install ripgrep` / `apt install ripgrep`）。当 `PATH` 中找不到 `rg` 时，Search 会返回一条指明 ripgrep 及安装方式的依赖错误，其余工具不受影响。
 
+Search 还支持工作区相对 `scope`、literal 模式、有界 include/exclude glob，以及 `matches`、`files_with_matches`、`count` 输出模式。每次请求仍调用系统 ripgrep，不建立常驻索引。
+
 ## 命令执行
 
 Exec 使用 argv 形式，不提供 shell 字符串模式。命令在启动前会做策略校验：对已知的 shell 与解释器（`sh`、`bash`、`python`、`ruby` 等）拒绝内联求值标志（`sh -c`、`bash -c`、`python -c`、`ruby -c`），并提示改用工作区内的脚本文件。这是策略过滤而非安全边界——`PATH` 中仍可能存在 `env` 这类包装器——真正的边界始终是下面的 sandbox。

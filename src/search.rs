@@ -36,17 +36,93 @@ pub struct SearchMatch {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMode {
+    Matches,
+    FilesWithMatches,
+    Count,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    pub literal: bool,
+    pub scope: String,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    pub mode: SearchMode,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            literal: false,
+            scope: ".".into(),
+            include: Vec::new(),
+            exclude: Vec::new(),
+            mode: SearchMode::Matches,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchCount {
+    pub path: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchOutput {
+    pub matches: Vec<SearchMatch>,
+    pub files: Vec<String>,
+    pub counts: Vec<SearchCount>,
+    pub truncated: bool,
+}
+
 pub fn content_search(
     workspace: &Workspace,
     query: &str,
     max_results: usize,
 ) -> Result<Vec<SearchMatch>, SearchError> {
+    let output = search(workspace, query, max_results, &SearchOptions::default())?;
+    Ok(output.matches)
+}
+
+pub fn search(
+    workspace: &Workspace,
+    query: &str,
+    max_results: usize,
+    options: &SearchOptions,
+) -> Result<SearchOutput, SearchError> {
     let max_results = max_results.clamp(1, 200);
+    workspace
+        .resolve(&options.scope)
+        .map_err(|error| SearchError::Failed(error.to_string()))?;
     let mut command = Command::new("rg");
+    command.args(["--color", "never"]);
+    match options.mode {
+        SearchMode::Matches => {
+            command.args(["--json", "--line-number"]);
+        }
+        SearchMode::FilesWithMatches => {
+            command.arg("--files-with-matches");
+        }
+        SearchMode::Count => {
+            command.args(["--count", "--no-heading"]);
+        }
+    }
+    if options.literal {
+        command.arg("--fixed-strings");
+    }
+    for include in &options.include {
+        command.args(["--glob", include]);
+    }
+    for exclude in &options.exclude {
+        command.args(["--glob", &format!("!{exclude}")]);
+    }
     command
-        .args(["--json", "--line-number", "--color", "never", "--"])
+        .arg("--")
         .arg(query)
-        .arg(".")
+        .arg(&options.scope)
         .current_dir(workspace.root());
     // Search runs outside the execution sandbox, but it must still start from a
     // bounded environment: an inherited `RIPGREP_CONFIG_PATH` or credential
@@ -66,10 +142,39 @@ pub fn content_search(
         )));
     }
 
-    Ok(parse_matches(
-        &String::from_utf8_lossy(&output.stdout),
-        max_results,
-    ))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut result = SearchOutput {
+        matches: Vec::new(),
+        files: Vec::new(),
+        counts: Vec::new(),
+        truncated: false,
+    };
+    match options.mode {
+        SearchMode::Matches => result.matches = parse_matches(&stdout, max_results),
+        SearchMode::FilesWithMatches => {
+            result.files = stdout
+                .lines()
+                .take(max_results)
+                .map(|path| path.to_string())
+                .collect();
+            result.truncated = stdout.lines().count() > max_results;
+        }
+        SearchMode::Count => {
+            for line in stdout.lines().take(max_results) {
+                let Some((path, count)) = line.rsplit_once(':') else {
+                    continue;
+                };
+                if let Ok(count) = count.parse() {
+                    result.counts.push(SearchCount {
+                        path: path.to_string(),
+                        count,
+                    });
+                }
+            }
+            result.truncated = stdout.lines().count() > max_results;
+        }
+    }
+    Ok(result)
 }
 
 /// Converts ripgrep's `--json` stream into at most `max_results` matches.
@@ -173,6 +278,11 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(parse_matches(&stdout, 5).len(), 5);
+    }
+
+    #[test]
+    fn default_options_preserve_match_mode() {
+        assert_eq!(SearchOptions::default().mode, SearchMode::Matches);
     }
 
     #[test]

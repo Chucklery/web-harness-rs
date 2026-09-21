@@ -124,6 +124,11 @@ fn handle(
                             "maxItems": 8
                         },
                         "max_results": {"type": "integer", "minimum": 1, "maximum": 200}
+                        ,"literal": {"type": "boolean", "default": false},
+                        "scope": {"type": "string"},
+                        "include": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
+                        "exclude": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
+                        "mode": {"type": "string", "enum": ["matches", "files_with_matches", "count"], "default": "matches"}
                     },
                     "oneOf": [
                         {"required": ["query"], "not": {"required": ["queries"]}},
