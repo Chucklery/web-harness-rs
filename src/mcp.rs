@@ -198,7 +198,7 @@ fn handle(
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "switch", "restore", "push"]},
+                        "action": {"type": "string", "enum": ["status", "diff", "log", "show", "show_file", "add", "commit", "switch", "create_branch", "restore", "push"]},
                         "staged": {"type": "boolean"},
                         "pathspec": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},

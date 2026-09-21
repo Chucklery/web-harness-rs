@@ -139,9 +139,32 @@ impl RuntimeTool for GitRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("HEAD"),
             ),
+            "show_file" => {
+                let path = pathspec.first().ok_or_else(|| {
+                    RuntimeToolError::new(
+                        RuntimeErrorKind::InvalidArguments,
+                        "show_file requires exactly one pathspec",
+                    )
+                })?;
+                if pathspec.len() != 1 {
+                    return Err(RuntimeToolError::new(
+                        RuntimeErrorKind::InvalidArguments,
+                        "show_file requires exactly one pathspec",
+                    ));
+                }
+                git::show_file(
+                    workspace,
+                    arguments
+                        .get("revision")
+                        .and_then(Value::as_str)
+                        .unwrap_or("HEAD"),
+                    path,
+                )
+            }
             "add" => git::add(workspace, &pathspec),
-            "commit" => git::commit(workspace, message.unwrap_or_default()),
+            "commit" => git::commit(workspace, message.unwrap_or_default(), &pathspec),
             "switch" => git::switch(workspace, branch.unwrap_or_default()),
+            "create_branch" => git::create_branch(workspace, branch.unwrap_or_default()),
             "restore" => git::restore(workspace, staged, &pathspec),
             "push" => git::push(workspace, remote, refspec),
             _ => unreachable!("risk_for validates the action"),
@@ -155,8 +178,8 @@ impl RuntimeTool for GitRuntime {
 
 fn risk_for(action: &str) -> Option<GitRisk> {
     match action {
-        "status" | "diff" | "log" | "show" => Some(GitRisk::ReadOnly),
-        "add" | "commit" | "switch" | "restore" => Some(GitRisk::LocalWrite),
+        "status" | "diff" | "log" | "show" | "show_file" => Some(GitRisk::ReadOnly),
+        "add" | "commit" | "switch" | "create_branch" | "restore" => Some(GitRisk::LocalWrite),
         "push" => Some(GitRisk::RemoteWrite),
         _ => None,
     }
@@ -225,7 +248,9 @@ mod tests {
     #[test]
     fn git_actions_have_explicit_risk_classes() {
         assert_eq!(risk_for("status"), Some(GitRisk::ReadOnly));
+        assert_eq!(risk_for("show_file"), Some(GitRisk::ReadOnly));
         assert_eq!(risk_for("commit"), Some(GitRisk::LocalWrite));
+        assert_eq!(risk_for("create_branch"), Some(GitRisk::LocalWrite));
         assert_eq!(risk_for("push"), Some(GitRisk::RemoteWrite));
         assert_eq!(risk_for("unknown"), None);
     }

@@ -83,12 +83,14 @@ Read-only actions:
 - diff
 - log
 - show
+- show_file
 
 Local mutation actions:
 
 - add
 - commit
 - switch
+- create_branch
 - restore
 
 Remote mutation:
@@ -99,7 +101,7 @@ Every mutation requires a one-time approval bound to the exact generated Git arg
 
 Mutation calls may provide `expected_head`; after approval and immediately before execution, the current HEAD must still match or the operation returns a conflict.
 
-Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
+`show_file` reads one workspace-scoped path from a validated revision. Commit accepts an optional pathspec list so existing staged changes outside that list are not included. Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
 
 ## permission
 

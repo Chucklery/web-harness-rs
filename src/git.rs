@@ -68,6 +68,14 @@ pub fn show(workspace: &Workspace, revision: &str) -> Result<GitResult, GitError
     )
 }
 
+pub fn show_file(workspace: &Workspace, revision: &str, path: &str) -> Result<GitResult, GitError> {
+    validate_ref_name(revision)?;
+    workspace
+        .resolve_for_write(path)
+        .map_err(|error| GitError::Invalid(error.to_string()))?;
+    run_owned(workspace, &["show".into(), format!("{revision}:{path}")])
+}
+
 pub fn add(workspace: &Workspace, pathspec: &[String]) -> Result<GitResult, GitError> {
     validate_pathspec(workspace, pathspec, true)?;
     if pathspec.is_empty() {
@@ -78,17 +86,29 @@ pub fn add(workspace: &Workspace, pathspec: &[String]) -> Result<GitResult, GitE
     run_owned(workspace, &args)
 }
 
-pub fn commit(workspace: &Workspace, message: &str) -> Result<GitResult, GitError> {
+pub fn commit(
+    workspace: &Workspace,
+    message: &str,
+    pathspec: &[String],
+) -> Result<GitResult, GitError> {
     validate_commit_message(message)?;
-    run_owned(
-        workspace,
-        &["commit".into(), "-m".into(), message.trim().to_string()],
-    )
+    validate_pathspec(workspace, pathspec, false)?;
+    let mut args = vec!["commit".into(), "-m".into(), message.trim().to_string()];
+    if !pathspec.is_empty() {
+        args.push("--".into());
+        args.extend(pathspec.iter().cloned());
+    }
+    run_owned(workspace, &args)
 }
 
 pub fn switch(workspace: &Workspace, branch: &str) -> Result<GitResult, GitError> {
     validate_ref_name(branch)?;
     run_owned(workspace, &["switch".into(), branch.into()])
+}
+
+pub fn create_branch(workspace: &Workspace, branch: &str) -> Result<GitResult, GitError> {
+    validate_ref_name(branch)?;
+    run_owned(workspace, &["switch".into(), "-c".into(), branch.into()])
 }
 
 pub fn restore(
@@ -149,17 +169,32 @@ pub fn mutation_argv(
         "commit" => {
             let message = message.unwrap_or_default();
             validate_commit_message(message)?;
-            Ok(vec![
+            let mut args = vec![
                 "git".into(),
                 "commit".into(),
                 "-m".into(),
                 message.trim().to_string(),
-            ])
+            ];
+            if !pathspec.is_empty() {
+                args.push("--".into());
+                args.extend(pathspec.iter().cloned());
+            }
+            Ok(args)
         }
         "switch" => {
             let branch = branch.unwrap_or_default();
             validate_ref_name(branch)?;
             Ok(vec!["git".into(), "switch".into(), branch.into()])
+        }
+        "create_branch" => {
+            let branch = branch.unwrap_or_default();
+            validate_ref_name(branch)?;
+            Ok(vec![
+                "git".into(),
+                "switch".into(),
+                "-c".into(),
+                branch.into(),
+            ])
         }
         "restore" => {
             if pathspec.is_empty() {
@@ -308,7 +343,7 @@ mod tests {
         fs::write(dir.path().join("a.txt"), "x").unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
         add(&workspace, &["a.txt".into()]).unwrap();
-        commit(&workspace, "test commit").unwrap();
+        commit(&workspace, "test commit", &[]).unwrap();
         assert!(log(&workspace, 1).unwrap().stdout.contains("test commit"));
     }
 
@@ -317,6 +352,32 @@ mod tests {
         assert_eq!(
             mutation_argv("push", false, &[], None, None, Some("origin"), Some("main")).unwrap(),
             vec!["git", "push", "origin", "main"]
+        );
+        assert_eq!(
+            mutation_argv(
+                "commit",
+                false,
+                &["a.txt".into()],
+                Some("message"),
+                None,
+                None,
+                None
+            )
+            .unwrap(),
+            vec!["git", "commit", "-m", "message", "--", "a.txt"]
+        );
+        assert_eq!(
+            mutation_argv(
+                "create_branch",
+                false,
+                &[],
+                None,
+                Some("feature/test"),
+                None,
+                None
+            )
+            .unwrap(),
+            vec!["git", "switch", "-c", "feature/test"]
         );
     }
 }
