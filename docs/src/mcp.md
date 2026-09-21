@@ -47,7 +47,7 @@ Discovers AGENTS.md files from the workspace root down to the target path and re
 
 ## patch
 
-Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace scoped, updates require matching context, ambiguous hunks are rejected, and writes use same-directory temporary files followed by rename.
+Applies bounded Codex-style Add File, Update File, and Delete File operations. Paths are workspace scoped, Add File creates missing parent directories only after boundary checks, updates require matching context, ambiguous hunks are rejected, and writes use same-directory temporary files followed by rename. `expected_read_revisions` optionally fences Update File operations against a prior read.
 
 ## exec
 

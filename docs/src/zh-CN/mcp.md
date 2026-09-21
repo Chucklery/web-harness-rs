@@ -33,6 +33,10 @@ macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区�
 
 网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并且必须使用绑定确切 argv、cwd、后台模式、capability 和网络策略的一次性审批。没有原生 sandbox backend 时会拒绝该升级，不提供 unsandboxed 网络模式。
 
+## patch
+
+Patch 支持有界的 Add、Update 和 Delete。路径始终受工作区边界保护；Add 会在边界检查后创建缺失的父目录，准备阶段失败会清理新建的空目录。可通过 `expected_read_revisions` 为 Update 提供读取版本 fence，文件变化时拒绝覆盖。
+
 被沙箱化的子进程会收到 `WEB_HARNESS_SANDBOX` 标记。若 web-harness 自身已经运行在 web-harness sandbox 内，该标记会阻止再次套用 Seatbelt——macOS 会以 `sandbox_apply: Operation not permitted` 拒绝嵌套 `sandbox-exec`，这正是此前通过 `exec` 运行 `cargo test` 失败的原因。该标记只抑制重复包装，外层 sandbox 依然生效。
 
 ## 审批

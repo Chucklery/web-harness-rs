@@ -146,7 +146,10 @@ fn handle(
                 "description": "Apply a bounded Codex-style structured patch inside the workspace.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"patch": {"type": "string", "maxLength": 524288}},
+                    "properties": {
+                        "patch": {"type": "string", "maxLength": 524288},
+                        "expected_read_revisions": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "string", "maxLength": 128}}
+                    },
                     "required": ["patch"],
                     "additionalProperties": false
                 }

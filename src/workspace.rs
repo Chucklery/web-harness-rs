@@ -126,6 +126,56 @@ impl Workspace {
         Ok(resolved)
     }
 
+    pub fn ensure_parent_dirs(
+        &self,
+        relative: impl AsRef<Path>,
+    ) -> Result<Vec<PathBuf>, WorkspaceError> {
+        let relative = relative.as_ref();
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(WorkspaceError::OutsideWorkspace(relative.to_path_buf()));
+        }
+        let mut current = self.root.clone();
+        let mut created = Vec::new();
+        let components = relative.components().collect::<Vec<_>>();
+        for component in components.iter().take(components.len().saturating_sub(1)) {
+            current.push(component.as_os_str());
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    cleanup_created_dirs(&created);
+                    return Err(WorkspaceError::Denied(current));
+                }
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => {
+                    cleanup_created_dirs(&created);
+                    return Err(WorkspaceError::Io(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "parent path is not a directory",
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if self.is_denied(&current) {
+                        cleanup_created_dirs(&created);
+                        return Err(WorkspaceError::Denied(current));
+                    }
+                    if let Err(error) = fs::create_dir(&current) {
+                        cleanup_created_dirs(&created);
+                        return Err(WorkspaceError::Io(error));
+                    }
+                    created.push(current.clone());
+                }
+                Err(error) => {
+                    cleanup_created_dirs(&created);
+                    return Err(WorkspaceError::Io(error));
+                }
+            }
+        }
+        Ok(created)
+    }
+
     pub fn read_text_bounded(
         &self,
         relative: impl AsRef<Path>,
@@ -180,6 +230,12 @@ impl Workspace {
         }
         found.reverse();
         Ok(found)
+    }
+}
+
+fn cleanup_created_dirs(created: &[PathBuf]) {
+    for directory in created.iter().rev() {
+        let _ = fs::remove_dir(directory);
     }
 }
 

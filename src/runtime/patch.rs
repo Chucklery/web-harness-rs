@@ -3,6 +3,7 @@ use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::patch;
 use crate::permission::Capability;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 const MAX_PATCH_BYTES: usize = 512 * 1024;
 
@@ -39,11 +40,52 @@ impl RuntimeTool for PatchRuntime {
                 "patch exceeds 512 KiB",
             ));
         }
-        let changed_paths = patch::apply(context.workspace(), patch_text).map_err(|error| {
-            RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
-        })?;
+        let expected_revisions =
+            parse_expected_revisions(arguments.get("expected_read_revisions"))?;
+        let changed_paths =
+            patch::apply_with_revisions(context.workspace(), patch_text, &expected_revisions)
+                .map_err(|error| {
+                    let kind = if matches!(error, patch::PatchError::Conflict(_)) {
+                        RuntimeErrorKind::Conflict
+                    } else {
+                        RuntimeErrorKind::Execution
+                    };
+                    RuntimeToolError::new(kind, error.to_string())
+                })?;
         Ok(json!({"changed_paths": changed_paths}))
     }
+}
+
+fn parse_expected_revisions(
+    value: Option<&Value>,
+) -> Result<HashMap<String, String>, RuntimeToolError> {
+    let Some(object) = value else {
+        return Ok(HashMap::new());
+    };
+    let object = object.as_object().ok_or_else(|| {
+        RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            "expected_read_revisions must be an object",
+        )
+    })?;
+    if object.len() > 32 {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            "expected_read_revisions may contain at most 32 paths",
+        ));
+    }
+    object
+        .iter()
+        .map(|(path, revision)| {
+            let revision = revision.as_str().ok_or_else(|| {
+                RuntimeToolError::new(
+                    RuntimeErrorKind::InvalidArguments,
+                    "expected_read_revisions values must be strings",
+                )
+            })?;
+            Ok((path.clone(), revision.to_string()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use crate::atomic_file;
 use crate::workspace::{Workspace, WorkspaceError};
+use std::collections::HashMap;
 use std::fs;
 use thiserror::Error;
 
@@ -28,27 +29,77 @@ struct Hunk {
     new: String,
 }
 
+#[cfg(any(test, feature = "release-tools"))]
 pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchError> {
+    apply_with_revisions(workspace, input, &HashMap::new())
+}
+
+pub fn apply_with_revisions(
+    workspace: &Workspace,
+    input: &str,
+    expected_revisions: &HashMap<String, String>,
+) -> Result<Vec<String>, PatchError> {
     let operations = parse(input)?;
     let mut prepared = Vec::new();
+    let mut created_dirs = Vec::new();
     for operation in operations {
         match operation {
             Operation::Add { path, content } => {
-                let target = workspace.resolve_for_write(&path)?;
+                let new_dirs = match workspace.ensure_parent_dirs(&path) {
+                    Ok(dirs) => dirs,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Workspace(error));
+                    }
+                };
+                for directory in new_dirs {
+                    if !created_dirs.contains(&directory) {
+                        created_dirs.push(directory);
+                    }
+                }
+                let target = match workspace.resolve_for_write(&path) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Workspace(error));
+                    }
+                };
                 if target.exists() {
+                    cleanup_dirs(&created_dirs);
                     return Err(PatchError::Conflict(path));
                 }
                 prepared.push((path, target, Some(content)));
             }
             Operation::Update { path, hunks } => {
-                let target = workspace.resolve(&path)?;
-                let mut content = fs::read_to_string(&target)?;
+                let target = match workspace.resolve(&path) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Workspace(error));
+                    }
+                };
+                if let Some(expected) = expected_revisions.get(&path) {
+                    let actual = workspace.read_revision(&path)?;
+                    if expected != &actual {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Conflict(path));
+                    }
+                }
+                let mut content = match fs::read_to_string(&target) {
+                    Ok(content) => content,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Io(error));
+                    }
+                };
                 for hunk in hunks {
                     let Some(index) = content.find(&hunk.old) else {
+                        cleanup_dirs(&created_dirs);
                         return Err(PatchError::Conflict(path.clone()));
                     };
                     if !hunk.old.is_empty() && content[index + hunk.old.len()..].contains(&hunk.old)
                     {
+                        cleanup_dirs(&created_dirs);
                         return Err(PatchError::Invalid(format!(
                             "ambiguous hunk in {path}; provide more context"
                         )));
@@ -58,7 +109,13 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
                 prepared.push((path, target, Some(content)));
             }
             Operation::Delete { path } => {
-                let target = workspace.resolve(&path)?;
+                let target = match workspace.resolve(&path) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Workspace(error));
+                    }
+                };
                 prepared.push((path, target, None));
             }
         }
@@ -83,6 +140,7 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
                 for entry in staged {
                     entry.discard();
                 }
+                cleanup_dirs(&created_dirs);
                 return Err(PatchError::Io(error));
             }
         }
@@ -93,6 +151,7 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
         if let Err(error) = entry.commit() {
             // The files already committed stay committed; report the failure
             // rather than pretending the patch was atomic across all of them.
+            cleanup_dirs(&created_dirs);
             return Err(PatchError::Io(error));
         }
         applied += 1;
@@ -100,6 +159,12 @@ pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchErr
     debug_assert_eq!(applied, changed.len());
 
     Ok(changed)
+}
+
+fn cleanup_dirs(created: &[std::path::PathBuf]) {
+    for directory in created.iter().rev() {
+        let _ = fs::remove_dir(directory);
+    }
 }
 
 fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
@@ -195,6 +260,7 @@ fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn applies_add_update_delete() {
@@ -214,6 +280,38 @@ mod tests {
             "created\n"
         );
         assert!(!dir.path().join("delete.txt").exists());
+    }
+
+    #[test]
+    fn add_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let patch = "*** Begin Patch\n*** Add File: nested/deep/new.txt\n+created\n*** End Patch";
+        apply(&ws, patch).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("nested/deep/new.txt")).unwrap(),
+            "created\n"
+        );
+    }
+
+    #[test]
+    fn expected_revision_fences_update() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let revision = ws.read_revision("a.txt").unwrap();
+        fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+        let mut expected = HashMap::new();
+        expected.insert("a.txt".to_string(), revision);
+        let patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch";
+        assert!(matches!(
+            apply_with_revisions(&ws, patch, &expected),
+            Err(PatchError::Conflict(path)) if path == "a.txt"
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "changed\n"
+        );
     }
 
     /// Creates a directory that rejects new files, or `None` when the process
