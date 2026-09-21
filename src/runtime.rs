@@ -217,9 +217,12 @@ pub fn connect(
             .as_secs(),
     };
     write_state(&state)?;
-    let mut status = UserStatus::from_state(Some(user_config), state, "connected");
-    status.denied_paths = workspace.denied();
-    Ok(status)
+    Ok(connected_status(
+        Some(user_config),
+        state,
+        workspace.denied(),
+        "connected",
+    ))
 }
 
 pub fn status() -> Result<UserStatus, RuntimeError> {
@@ -264,7 +267,18 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
             "stale connection state was cleaned up",
         ));
     }
-    Ok(UserStatus::from_state(user_config, state, "connected"))
+    Ok(connected_status(user_config, state, denied, "connected"))
+}
+
+fn connected_status(
+    user_config: Option<UserConfig>,
+    state: RuntimeState,
+    denied_paths: Vec<String>,
+    message: &str,
+) -> UserStatus {
+    let mut status = UserStatus::from_state(user_config, state, message);
+    status.denied_paths = denied_paths;
+    status
 }
 
 pub fn disconnect() -> Result<UserStatus, RuntimeError> {
@@ -409,6 +423,23 @@ mod tests {
         assert!(!value.connected);
         assert!(value.workspace.is_none());
         assert_eq!(value.sandbox, sandbox::status());
+    }
+
+    #[test]
+    fn connected_status_preserves_the_workspace_boundary() {
+        let value = connected_status(
+            None,
+            RuntimeState {
+                schema_version: 1,
+                tunnel_pid: std::process::id(),
+                workspace: "/tmp/project".into(),
+                started_unix_s: 0,
+            },
+            vec![".git".into(), "target".into()],
+            "connected",
+        );
+        assert_eq!(value.denied_paths, [".git", "target"]);
+        assert!(format_status(&value).contains("excluded: .git, target"));
     }
 
     #[test]
