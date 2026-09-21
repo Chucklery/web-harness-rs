@@ -1,5 +1,6 @@
 use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
+use crate::command_policy::{self, CommandRisk};
 use crate::exec;
 use crate::permission::{Capability, ExecAuthorization};
 use serde_json::{json, Value};
@@ -59,14 +60,21 @@ impl RuntimeTool for ExecRuntime {
             ));
         }
 
+        let capability = match command_policy::command_risk(&argv) {
+            Some(CommandRisk::GitLocalWrite) => Capability::GitLocalWrite,
+            Some(CommandRisk::GitRemoteWrite) => Capability::GitRemoteWrite,
+            None => Capability::ProcessExecute,
+        };
         let authorization = ExecAuthorization {
-            capability: Capability::ProcessExecute,
+            capability,
             argv: argv.clone(),
             cwd: cwd.map(ToOwned::to_owned),
             background,
         };
         let sandbox = context.sandbox();
-        if !sandbox.enforced() {
+        if capability.requires_approval()
+            && (capability != Capability::ProcessExecute || !sandbox.enforced())
+        {
             if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                 context
                     .permissions()
@@ -75,10 +83,28 @@ impl RuntimeTool for ExecRuntime {
                         RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
                     })?;
             } else {
-                let approval = context.permissions().request_exec(&authorization);
+                let (summary, reason) = match capability {
+                    Capability::GitLocalWrite => (
+                        "Run Git through exec".to_string(),
+                        "Direct Git execution may change the local repository and requires explicit one-time approval".to_string(),
+                    ),
+                    Capability::GitRemoteWrite => (
+                        "Run Git push through exec".to_string(),
+                        "Direct Git push may change a remote repository and requires explicit one-time approval".to_string(),
+                    ),
+                    _ => (
+                        format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
+                        "OS sandbox enforcement is not enabled; explicit approval is required".to_string(),
+                    ),
+                };
+                let approval =
+                    context
+                        .permissions()
+                        .request_action(&authorization, summary, reason);
                 return Ok(json!({
                     "status": "approval_required",
-                    "approval": approval
+                    "approval": approval,
+                    "capability": capability.as_str()
                 }));
             }
         }
@@ -131,5 +157,26 @@ mod tests {
             .call(&mut context, &json!({"argv": []}))
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn direct_git_uses_git_approval_capabilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let local = ExecRuntime
+            .call(&mut context, &json!({"argv": ["git", "status"]}))
+            .unwrap();
+        assert_eq!(local["status"], "approval_required");
+        assert_eq!(local["capability"], "git.local.write");
+
+        let remote = ExecRuntime
+            .call(&mut context, &json!({"argv": ["git", "push"]}))
+            .unwrap();
+        assert_eq!(remote["status"], "approval_required");
+        assert_eq!(remote["capability"], "git.remote.write");
     }
 }

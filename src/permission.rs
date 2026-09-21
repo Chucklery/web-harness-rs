@@ -100,17 +100,6 @@ impl PermissionEngine {
         Ok(())
     }
 
-    pub fn request_exec(&mut self, request: &ExecAuthorization) -> ApprovalRequest {
-        self.request_action(
-            request,
-            format!(
-                "Run {}",
-                request.argv.first().map(String::as_str).unwrap_or("?")
-            ),
-            "OS sandbox enforcement is not enabled; explicit approval is required".into(),
-        )
-    }
-
     pub fn request_action(
         &mut self,
         request: &ExecAuthorization,
@@ -212,11 +201,18 @@ mod tests {
         }
     }
 
+    fn request_ticket(
+        engine: &mut PermissionEngine,
+        request: &ExecAuthorization,
+    ) -> ApprovalRequest {
+        engine.request_action(request, "test".into(), "test".into())
+    }
+
     #[test]
     fn approval_is_bound_to_exact_request_and_single_use() {
         let mut engine = PermissionEngine::new().unwrap();
         let first = request(&["cargo", "test"]);
-        let ticket = engine.request_exec(&first);
+        let ticket = request_ticket(&mut engine, &first);
         engine.approve(&ticket.id).unwrap();
         assert!(matches!(
             engine.consume_exec(&ticket.id, &request(&["cargo", "check"])),
@@ -242,7 +238,7 @@ mod tests {
     fn approved_ticket_can_be_consumed_once() {
         let mut engine = PermissionEngine::new().unwrap();
         let request = request(&["cargo", "test"]);
-        let ticket = engine.request_exec(&request);
+        let ticket = request_ticket(&mut engine, &request);
         engine.approve(&ticket.id).unwrap();
         engine.consume_exec(&ticket.id, &request).unwrap();
         assert!(matches!(
@@ -255,7 +251,7 @@ mod tests {
     fn mismatch_does_not_consume_ticket() {
         let mut engine = PermissionEngine::new().unwrap();
         let approved = request(&["cargo", "test"]);
-        let ticket = engine.request_exec(&approved);
+        let ticket = request_ticket(&mut engine, &approved);
         engine.approve(&ticket.id).unwrap();
 
         // A mismatching consume must NOT invalidate the ticket.
@@ -300,7 +296,7 @@ mod tests {
     fn not_approved_ticket_is_preserved_until_approval() {
         let mut engine = PermissionEngine::new().unwrap();
         let req = request(&["cargo", "test"]);
-        let ticket = engine.request_exec(&req);
+        let ticket = request_ticket(&mut engine, &req);
 
         // Consuming before approval must not destroy the ticket.
         assert!(matches!(

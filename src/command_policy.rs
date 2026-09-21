@@ -11,6 +11,12 @@ pub enum CommandPolicyError {
     InlineEvaluation(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandRisk {
+    GitLocalWrite,
+    GitRemoteWrite,
+}
+
 /// Inline evaluation flags, checked by name rather than per interpreter so a
 /// new interpreter cannot quietly reintroduce the surface.
 ///
@@ -50,6 +56,55 @@ pub fn validate_argv(argv: &[String]) -> Result<(), CommandPolicyError> {
         }
     }
     Ok(())
+}
+
+/// Classifies direct Git execution before spawn so it shares the structured
+/// Git approval capabilities. Wrappers are intentionally not unwrapped here:
+/// this is a clear policy decision, while the OS sandbox remains the boundary.
+pub fn command_risk(argv: &[String]) -> Option<CommandRisk> {
+    let executable = argv.first()?;
+    let basename = Path::new(executable)
+        .file_name()
+        .and_then(|value| value.to_str())?;
+    let basename = basename
+        .strip_suffix(".exe")
+        .unwrap_or(basename)
+        .to_ascii_lowercase();
+    if basename != "git" {
+        return None;
+    }
+
+    if git_subcommand(argv) == Some("push") {
+        Some(CommandRisk::GitRemoteWrite)
+    } else {
+        // Even nominally read-only Git commands accept options and aliases
+        // with side effects. Conservatively bind every other direct Git call
+        // to local-repository write approval.
+        Some(CommandRisk::GitLocalWrite)
+    }
+}
+
+fn git_subcommand(argv: &[String]) -> Option<&str> {
+    let mut index = 1;
+    while index < argv.len() {
+        let argument = argv[index].as_str();
+        if argument == "--" {
+            return argv.get(index + 1).map(String::as_str);
+        }
+        if matches!(
+            argument,
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace"
+        ) {
+            index += 2;
+            continue;
+        }
+        if argument.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return Some(argument);
+    }
+    None
 }
 
 /// Shells and interpreters whose inline-evaluation flag turns `exec` into an
@@ -170,5 +225,18 @@ mod tests {
         validate_argv(&["cargo".into(), "test".into()]).unwrap();
         validate_argv(&["/usr/bin/git".into(), "status".into()]).unwrap();
         validate_argv(&["rm".into(), "-f".into(), "target/file".into()]).unwrap();
+    }
+
+    #[test]
+    fn classifies_direct_git_with_global_options() {
+        assert_eq!(
+            command_risk(&["/usr/bin/git".into(), "status".into()]),
+            Some(CommandRisk::GitLocalWrite)
+        );
+        assert_eq!(
+            command_risk(&["git".into(), "-C".into(), "nested".into(), "push".into()]),
+            Some(CommandRisk::GitRemoteWrite)
+        );
+        assert_eq!(command_risk(&["cargo".into(), "test".into()]), None);
     }
 }

@@ -47,6 +47,8 @@ Applies bounded Codex-style Add File, Update File, and Delete File operations. P
 
 Executes argv-based commands inside the workspace. Shell-string mode is intentionally absent: the command is validated before it starts, and an inline-evaluation flag (`sh -c`, `bash -c`, `python -c`, `ruby -c`) on a known shell or interpreter is rejected with a message that points at the script-file form in the workspace. This is a policy filter rather than a security boundary — `PATH` can still contain a wrapper such as `env` — so the sandbox below remains the actual boundary.
 
+Direct Git commands sent through exec are classified before spawn and use the same approval capabilities as structured Git: `git push` requires `git.remote.write`; every other direct Git invocation conservatively requires `git.local.write`. An approved executable or wrapper may still mutate files inside the sandboxed workspace, so approval of general process execution grants that workspace-scoped authority.
+
 On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
 
 The macOS profile allows writes only inside the workspace, TMPDIR, `/tmp`, `/private/tmp`, and `/dev/null`. `/dev/null` is granted explicitly because shells, Git, and most compiler and build toolchains open it unconditionally; without it `git status` and similar commands fail with `Operation not permitted`.
