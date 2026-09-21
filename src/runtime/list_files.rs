@@ -210,13 +210,12 @@ fn all_entries(
                 && include
                     .map(|pattern| glob_matches(pattern, &relative_text))
                     .unwrap_or(true)
+                && context.workspace().resolve(&relative_text).is_ok()
             {
-                if context.workspace().resolve(&relative_text).is_ok() {
-                    entries.push(Entry {
-                        path: relative_text.clone(),
-                        kind,
-                    });
-                }
+                entries.push(Entry {
+                    path: relative_text.clone(),
+                    kind,
+                });
             }
             if kind == FileKind::Directory
                 && !path_policy::is_protected(&relative_text)

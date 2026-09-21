@@ -240,7 +240,7 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
     let denied = match user_config.as_ref() {
         Some(config) => {
             let workspace = Path::new(&config.workspace);
-            let paths = if workspace.is_dir() {
+            if workspace.is_dir() {
                 crate::workspace::effective_deny_paths(None)
                     .ok()
                     .and_then(|denied| Workspace::with_denied(workspace, &denied).ok())
@@ -248,8 +248,7 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
                     .unwrap_or_default()
             } else {
                 Vec::new()
-            };
-            paths
+            }
         }
         None => Vec::new(),
     };

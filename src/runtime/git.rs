@@ -66,9 +66,7 @@ impl RuntimeTool for GitRuntime {
         match risk {
             GitRisk::ReadOnly => {
                 let protected_read = action == "show_file"
-                    && pathspec
-                        .first()
-                        .is_some_and(|path| path_policy::is_protected(path));
+                    && pathspec.first().is_some_and(path_policy::is_protected);
                 if protected_read {
                     let path = pathspec.first().expect("protected_read has a path");
                     let revision = arguments

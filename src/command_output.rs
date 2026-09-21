@@ -2,6 +2,8 @@ use std::io::{self, Read};
 use std::process::{Child, ExitStatus};
 use std::thread;
 
+type StreamReader = thread::JoinHandle<io::Result<(Vec<u8>, bool)>>;
+
 pub struct BoundedChildOutput {
     pub status: ExitStatus,
     pub stdout: Vec<u8>,
@@ -78,9 +80,7 @@ pub fn read_tail_stream(
     read_bounded_tail(stream, limit)
 }
 
-fn join_stream(
-    stream: Option<thread::JoinHandle<io::Result<(Vec<u8>, bool)>>>,
-) -> io::Result<(Vec<u8>, bool)> {
+fn join_stream(stream: Option<StreamReader>) -> io::Result<(Vec<u8>, bool)> {
     match stream {
         Some(stream) => stream
             .join()

@@ -78,7 +78,7 @@ impl RuntimeTool for FileRuntime {
         let mut total = 0usize;
         let mut files = Vec::with_capacity(values.len());
         for request in &requests {
-            let read = read_range(context, &request, limits.max_read_file_bytes)?;
+            let read = read_range(context, request, limits.max_read_file_bytes)?;
             total = total.checked_add(read.text.len()).ok_or_else(|| {
                 RuntimeToolError::new(
                     RuntimeErrorKind::LimitExceeded,

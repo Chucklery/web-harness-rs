@@ -2,6 +2,7 @@ use crate::jobs::{ExecResult, JobError, JobManager, JobStatus};
 use crate::sandbox::NetworkPolicy;
 use crate::workspace::Workspace;
 
+#[allow(clippy::too_many_arguments)]
 pub fn foreground(
     manager: &JobManager,
     workspace: &Workspace,
