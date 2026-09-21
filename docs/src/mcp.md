@@ -15,6 +15,8 @@ These are compatibility controls, not a second execution system. `call_runtime_t
 
 Tool results provide bounded `structuredContent` alongside the text content compatibility projection. Clients should prefer the structured field and treat text as display/fallback data.
 
+`tools/list` includes MCP `ToolAnnotations` as conservative interaction hints. They describe read-only, destructive, and open-world behavior for Host UX; they are not the security boundary. Capability checks, Host elicitation, workspace guards, and the OS sandbox remain authoritative.
+
 ## workspace_info
 
 Returns the canonical configured workspace root.

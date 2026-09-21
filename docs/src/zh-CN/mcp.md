@@ -15,6 +15,8 @@ web-harness 保持较小的工具集合，避免暴露过大的执行面。
 
 工具结果在兼容文本投影之外同时提供有界的 `structuredContent`。客户端应优先使用结构化字段，把文本视为展示或兼容回退数据。
 
+`tools/list` 包含保守的 MCP `ToolAnnotations` 交互提示，用于描述只读、破坏性和外部世界行为，帮助 Host 呈现确认界面；它们不是安全边界。真正的边界仍由 capability 检查、Host elicitation、工作区保护和 OS sandbox 执行。
+
 `read_files` 保留字符串路径的兼容格式，也支持带 `start_line`、`end_line` 和 `expected_read_revision` 的对象路径。结果返回有界 `read_revision`；截断结果提供可直接续读的参数，文件版本变化时会以 Conflict 拒绝续读。
 
 常见 protected path（`.env`、私钥、凭据等）会先返回一次性审批票据；Host 确认后，使用 `approval_id` 重试读取。

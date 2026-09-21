@@ -58,6 +58,21 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
         assert!(names.contains(&expected), "missing MCP tool: {expected}");
     }
     assert!(!names.contains(&"permission"));
+    let patch_tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "patch")
+        .unwrap();
+    assert_eq!(patch_tool["annotations"]["readOnlyHint"], false);
+    assert_eq!(patch_tool["annotations"]["destructiveHint"], true);
+    let read_tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "read_files")
+        .unwrap();
+    assert_eq!(read_tool["annotations"]["readOnlyHint"], true);
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
