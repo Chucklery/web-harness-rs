@@ -148,6 +148,10 @@ fn adaptive_runtime_control_tools_are_callable() {
     let direct: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     let direct_text = direct["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(direct_text, routed_text);
+    assert_eq!(
+        direct["result"]["structuredContent"]["files"][0]["text"],
+        "hello shim"
+    );
 
     let permission_bypass: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(permission_bypass["error"]["code"], -32602);

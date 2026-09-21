@@ -299,7 +299,10 @@ fn handle(
 }
 
 fn runtime_content(value: Value) -> Value {
-    json!({"content": [{"type": "text", "text": value.to_string()}]})
+    json!({
+        "content": [{"type": "text", "text": value.to_string()}],
+        "structuredContent": value
+    })
 }
 
 fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
@@ -408,7 +411,7 @@ fn call_tool(
                 "readiness": {"status": "ready"},
                 "runtime": "adaptive_shim"
             });
-            Ok(json!({"content": [{"type": "text", "text": value.to_string()}]}))
+            Ok(runtime_content(value))
         }
         "tool_manifest" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);

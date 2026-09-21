@@ -13,6 +13,8 @@ web-harness 保持较小的工具集合，避免暴露过大的执行面。
 - 后台任务管理
 - Git 操作
 
+工具结果在兼容文本投影之外同时提供有界的 `structuredContent`。客户端应优先使用结构化字段，把文本视为展示或兼容回退数据。
+
 `read_files` 保留字符串路径的兼容格式，也支持带 `start_line`、`end_line` 和 `expected_read_revision` 的对象路径。结果返回有界 `read_revision`；截断结果提供可直接续读的参数，文件版本变化时会以 Conflict 拒绝续读。
 
 ## 搜索
