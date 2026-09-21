@@ -40,6 +40,8 @@ struct RuntimeState {
     tunnel_pid: u32,
     workspace: String,
     started_unix_s: u64,
+    #[serde(default)]
+    denied_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,9 +131,15 @@ pub fn connect(
 
     if let Some(existing) = read_state()? {
         if process::process_alive(existing.tunnel_pid) {
-            return Ok(UserStatus::from_state(
+            let existing_denied = if existing.denied_paths.is_empty() {
+                denied.clone()
+            } else {
+                existing.denied_paths.clone()
+            };
+            return Ok(connected_status(
                 Some(user_config),
                 existing,
+                existing_denied,
                 "already connected",
             ));
         }
@@ -215,6 +223,7 @@ pub fn connect(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
+        denied_paths: workspace.denied(),
     };
     write_state(&state)?;
     Ok(connected_status(
@@ -267,7 +276,17 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
             "stale connection state was cleaned up",
         ));
     }
-    Ok(connected_status(user_config, state, denied, "connected"))
+    let state_denied = if state.denied_paths.is_empty() {
+        denied
+    } else {
+        state.denied_paths.clone()
+    };
+    Ok(connected_status(
+        user_config,
+        state,
+        state_denied,
+        "connected",
+    ))
 }
 
 fn connected_status(
@@ -434,12 +453,25 @@ mod tests {
                 tunnel_pid: std::process::id(),
                 workspace: "/tmp/project".into(),
                 started_unix_s: 0,
+                denied_paths: Vec::new(),
             },
             vec![".git".into(), "target".into()],
             "connected",
         );
         assert_eq!(value.denied_paths, [".git", "target"]);
         assert!(format_status(&value).contains("excluded: .git, target"));
+    }
+
+    #[test]
+    fn runtime_state_keeps_legacy_files_readable() {
+        let value: RuntimeState = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "tunnel_pid": 42,
+            "workspace": "/tmp/project",
+            "started_unix_s": 0
+        }))
+        .unwrap();
+        assert!(value.denied_paths.is_empty());
     }
 
     #[test]
