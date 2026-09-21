@@ -25,6 +25,14 @@ pub struct GitResult {
     pub truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GitDiffPage {
+    pub hunks: Vec<String>,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
+    pub truncated: bool,
+}
+
 pub fn status(workspace: &Workspace) -> Result<GitResult, GitError> {
     run(workspace, &["status", "--short", "--branch"])
 }
@@ -42,7 +50,7 @@ pub fn diff(
     pathspec: &[String],
 ) -> Result<GitResult, GitError> {
     validate_pathspec(workspace, pathspec, false)?;
-    let mut args = vec!["diff".to_string()];
+    let mut args = vec!["diff".to_string(), "--no-color".to_string()];
     if staged {
         args.push("--cached".into());
     }
@@ -51,6 +59,31 @@ pub fn diff(
         args.extend(pathspec.iter().cloned());
     }
     run_owned(workspace, &args)
+}
+
+pub fn diff_page(
+    workspace: &Workspace,
+    staged: bool,
+    pathspec: &[String],
+    offset: u64,
+    limit: u64,
+) -> Result<GitDiffPage, GitError> {
+    let result = diff(workspace, staged, pathspec)?;
+    let chunks = split_diff_hunks(&result.stdout);
+    let offset = (offset as usize).min(chunks.len());
+    let limit = limit.clamp(1, 32) as usize;
+    let end = offset.saturating_add(limit).min(chunks.len());
+    let next_offset = if result.truncated || end == chunks.len() {
+        None
+    } else {
+        Some(end)
+    };
+    Ok(GitDiffPage {
+        hunks: chunks[offset..end].to_vec(),
+        offset,
+        next_offset,
+        truncated: result.truncated || next_offset.is_some(),
+    })
 }
 
 pub fn log(workspace: &Workspace, limit: u64) -> Result<GitResult, GitError> {
@@ -245,6 +278,40 @@ fn validate_pathspec(
     Ok(())
 }
 
+fn split_diff_hunks(diff: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut prefix = String::new();
+    let mut has_hunk = false;
+
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            if !current.is_empty() {
+                chunks.push(current);
+            }
+            current = line.to_string();
+            prefix = current.clone();
+            has_hunk = false;
+        } else if line.starts_with("@@ ") {
+            if has_hunk {
+                chunks.push(current);
+            }
+            current = std::mem::take(&mut prefix);
+            current.push_str(line);
+            has_hunk = true;
+        } else {
+            current.push_str(line);
+            if !has_hunk {
+                prefix.push_str(line);
+            }
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 fn validate_commit_message(message: &str) -> Result<(), GitError> {
     let message = message.trim();
     if message.is_empty() || message.len() > 4096 {
@@ -380,5 +447,32 @@ mod tests {
             .unwrap(),
             vec!["git", "switch", "-c", "feature/test"]
         );
+    }
+
+    #[test]
+    fn diff_hunks_are_pageable_without_crossing_file_boundaries() {
+        let diff = concat!(
+            "diff --git a/a.txt b/a.txt\n",
+            "index 1..2 100644\n",
+            "--- a/a.txt\n",
+            "+++ b/a.txt\n",
+            "@@ -1 +1 @@\n",
+            "-old\n",
+            "+new\n",
+            "@@ -4 +4 @@\n",
+            "-old2\n",
+            "+new2\n",
+            "diff --git a/b.txt b/b.txt\n",
+            "--- a/b.txt\n",
+            "+++ b/b.txt\n",
+            "@@ -1 +1 @@\n",
+            "-x\n",
+            "+y\n",
+        );
+        let chunks = split_diff_hunks(diff);
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks[0].starts_with("diff --git a/a.txt b/a.txt\n"));
+        assert!(chunks[1].starts_with("@@ -4 +4 @@\n"));
+        assert!(chunks[2].starts_with("diff --git a/b.txt b/b.txt\n"));
     }
 }

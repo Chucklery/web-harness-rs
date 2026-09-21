@@ -128,7 +128,25 @@ impl RuntimeTool for GitRuntime {
         let workspace = context.workspace();
         let result = match action {
             "status" => git::status(workspace),
-            "diff" => git::diff(workspace, staged, &pathspec),
+            "diff" => {
+                let offset = arguments.get("offset").and_then(Value::as_u64);
+                let limit = arguments.get("limit").and_then(Value::as_u64);
+                if offset.is_some() || limit.is_some() {
+                    let page = git::diff_page(
+                        workspace,
+                        staged,
+                        &pathspec,
+                        offset.unwrap_or(0),
+                        limit.unwrap_or(16),
+                    )
+                    .map_err(git_error)?;
+                    return serde_json::to_value(page).map_err(|error| {
+                        RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+                    });
+                } else {
+                    git::diff(workspace, staged, &pathspec)
+                }
+            }
             "log" => git::log(
                 workspace,
                 arguments.get("limit").and_then(Value::as_u64).unwrap_or(20),

@@ -203,6 +203,7 @@ fn handle(
                         "staged": {"type": "boolean"},
                         "pathspec": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
                         "revision": {"type": "string", "maxLength": 256},
                         "message": {"type": "string", "minLength": 1, "maxLength": 4096},
                         "branch": {"type": "string", "minLength": 1, "maxLength": 256},
