@@ -1,4 +1,5 @@
 use super::context::ExecutionContext;
+use super::protected;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::git::{self, GitError};
 use crate::path_policy;
@@ -74,34 +75,18 @@ impl RuntimeTool for GitRuntime {
                         .get("revision")
                         .and_then(Value::as_str)
                         .unwrap_or("HEAD");
-                    let authorization = ExecAuthorization {
-                        capability: Capability::WorkspaceSensitiveRead,
-                        argv: vec!["git".into(), "show".into(), format!("{revision}:{path}")],
-                        cwd: Some(".".into()),
-                        background: false,
-                        network: NetworkPolicy::Deny,
-                        expected_head: None,
-                        stdin: None,
-                        protected_read: true,
-                    };
-                    if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str)
-                    {
-                        context
-                            .permissions()
-                            .consume_exec(approval_id, &authorization)
-                            .map_err(permission_error)?;
-                    } else {
-                        let approval = context.permissions().request_action(
-                            &authorization,
-                            "Read a protected Git revision file".into(),
-                            "Sensitive paths require explicit one-time user approval".into(),
-                        );
-                        return Ok(json!({
-                            "status": "approval_required",
-                            "approval": approval,
-                            "capability": Capability::WorkspaceSensitiveRead.as_str(),
-                            "protected_paths": [path]
-                        }));
+                    let authorization = protected::authorization(
+                        vec!["git".into(), "show".into(), format!("{revision}:{path}")],
+                        true,
+                    );
+                    if let Some(pending) = protected::authorize_or_request(
+                        context,
+                        arguments.get("approval_id").and_then(Value::as_str),
+                        &authorization,
+                        "Read a protected Git revision file",
+                        std::slice::from_ref(path),
+                    )? {
+                        return Ok(pending);
                     }
                 } else {
                     context

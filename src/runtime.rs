@@ -7,6 +7,7 @@ pub(crate) mod list_files;
 pub(crate) mod manifest;
 pub(crate) mod patch;
 pub(crate) mod permission;
+pub(crate) mod protected;
 pub(crate) mod registry;
 pub(crate) mod search;
 pub(crate) mod status;
