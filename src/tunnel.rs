@@ -88,13 +88,15 @@ pub fn accept(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = spawn_in_group(command)?;
+    let mut child = ChildGuard::new(spawn_in_group(command)?);
 
     let stdout = child
+        .child_mut()
         .stdout
         .take()
         .ok_or_else(|| TunnelError::Local("missing external stdout".into()))?;
     let stderr = child
+        .child_mut()
         .stderr
         .take()
         .ok_or_else(|| TunnelError::Local("missing external stderr".into()))?;
@@ -105,12 +107,12 @@ pub fn accept(
 
     let start = Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.child_mut().try_wait()? {
             break status;
         }
         if start.elapsed() >= EXTERNAL_TIMEOUT {
-            terminate_child(&mut child)?;
-            let _ = child.wait();
+            terminate_child(child.child_mut())?;
+            let _ = child.child_mut().wait();
             let stdout = stdout_reader
                 .join()
                 .unwrap_or_else(|_| Ok((Vec::new(), false)))?;
@@ -140,6 +142,7 @@ pub fn accept(
     let stderr = stderr_reader
         .join()
         .map_err(|_| TunnelError::Local("external stderr reader panicked".into()))??;
+    child.disarm();
     let passed = status.success();
     Ok(TunnelReport {
         passed,
@@ -162,6 +165,35 @@ fn terminate_child(child: &mut Child) -> Result<(), TunnelError> {
     Ok(())
 }
 
+struct ChildGuard {
+    child: Option<Child>,
+}
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("child guard must be armed")
+    }
+
+    fn disarm(mut self) {
+        self.child.take();
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let _ = process::terminate_process_group(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 fn spawn_in_group(mut command: Command) -> Result<Child, TunnelError> {
     process::detach_into_own_group(&mut command)
         .map_err(|error| TunnelError::Local(error.to_string()))?;
@@ -177,9 +209,10 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = spawn_in_group(command)?;
+    let mut child = ChildGuard::new(spawn_in_group(command)?);
 
     let mut stdin = child
+        .child_mut()
         .stdin
         .take()
         .ok_or_else(|| TunnelError::Local("missing child stdin".into()))?;
@@ -196,6 +229,7 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     stdin.flush()?;
 
     let stdout = child
+        .child_mut()
         .stdout
         .take()
         .ok_or_else(|| TunnelError::Local("missing child stdout".into()))?;
@@ -219,11 +253,12 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     }
 
     drop(stdin);
-    if !child.wait()?.success() {
+    if !child.child_mut().wait()?.success() {
         return Err(TunnelError::Local(
             "stdio server exited unsuccessfully".into(),
         ));
     }
+    child.disarm();
     Ok(())
 }
 
