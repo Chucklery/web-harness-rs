@@ -52,6 +52,32 @@ fn read_bounded(mut stream: impl Read, limit: usize) -> io::Result<(Vec<u8>, boo
     Ok((output, truncated))
 }
 
+fn read_bounded_tail(mut stream: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
+    let mut output = Vec::with_capacity(limit.min(8192));
+    let mut buffer = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.extend_from_slice(&buffer[..read]);
+        if output.len() > limit {
+            let remove = output.len() - limit;
+            output.drain(..remove);
+            truncated = true;
+        }
+    }
+    Ok((output, truncated))
+}
+
+pub fn read_tail_stream(
+    stream: impl Read + Send + 'static,
+    limit: usize,
+) -> io::Result<(Vec<u8>, bool)> {
+    read_bounded_tail(stream, limit)
+}
+
 fn join_stream(
     stream: Option<thread::JoinHandle<io::Result<(Vec<u8>, bool)>>>,
 ) -> io::Result<(Vec<u8>, bool)> {

@@ -1,8 +1,9 @@
+use crate::command_output;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -90,24 +91,18 @@ pub fn accept(
         .stderr(Stdio::piped())
         .spawn()?;
 
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| TunnelError::Local("missing external stdout".into()))?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| TunnelError::Local("missing external stderr".into()))?;
-    let stdout_reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        bytes
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr.read_to_end(&mut bytes);
-        bytes
-    });
+    let stdout_reader =
+        std::thread::spawn(move || command_output::read_tail_stream(stdout, OUTPUT_LIMIT));
+    let stderr_reader =
+        std::thread::spawn(move || command_output::read_tail_stream(stderr, OUTPUT_LIMIT));
 
     let start = Instant::now();
     let status = loop {
@@ -117,18 +112,22 @@ pub fn accept(
         if start.elapsed() >= EXTERNAL_TIMEOUT {
             child.kill()?;
             let _ = child.wait();
-            let stdout = stdout_reader.join().unwrap_or_default();
-            let stderr = stderr_reader.join().unwrap_or_default();
+            let stdout = stdout_reader
+                .join()
+                .unwrap_or_else(|_| Ok((Vec::new(), false)))?;
+            let stderr = stderr_reader
+                .join()
+                .unwrap_or_else(|_| Ok((Vec::new(), false)))?;
             return Ok(TunnelReport {
                 passed: false,
                 local_mcp_roundtrip: true,
                 external_command_configured: true,
                 external_command_passed: Some(false),
                 external_exit_code: None,
-                stdout_tail: Some(redact::text(&bounded_tail(&stdout, OUTPUT_LIMIT))),
+                stdout_tail: Some(redact::text(&String::from_utf8_lossy(&stdout.0))),
                 stderr_tail: Some(format!(
                     "{}\nexternal tunnel acceptance command timed out after 120 seconds",
-                    redact::text(&bounded_tail(&stderr, OUTPUT_LIMIT))
+                    redact::text(&String::from_utf8_lossy(&stderr.0))
                 )),
                 note: "The injected command is responsible for exercising the current official Secure MCP Tunnel flow.".into(),
             });
@@ -136,8 +135,12 @@ pub fn accept(
         std::thread::sleep(Duration::from_millis(50));
     };
 
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| TunnelError::Local("external stdout reader panicked".into()))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| TunnelError::Local("external stderr reader panicked".into()))??;
     let passed = status.success();
     Ok(TunnelReport {
         passed,
@@ -145,8 +148,8 @@ pub fn accept(
         external_command_configured: true,
         external_command_passed: Some(passed),
         external_exit_code: status.code(),
-        stdout_tail: Some(redact::text(&bounded_tail(&stdout, OUTPUT_LIMIT))),
-        stderr_tail: Some(redact::text(&bounded_tail(&stderr, OUTPUT_LIMIT))),
+        stdout_tail: Some(redact::text(&String::from_utf8_lossy(&stdout.0))),
+        stderr_tail: Some(redact::text(&String::from_utf8_lossy(&stderr.0))),
         note: "The external command is user/CI supplied so this project never invents tunnel-client flags. It should implement the current official Secure MCP Tunnel acceptance steps.".into(),
     })
 }
@@ -209,17 +212,16 @@ fn local_roundtrip(workspace: &Workspace) -> Result<(), TunnelError> {
     Ok(())
 }
 
-fn bounded_tail(bytes: &[u8], limit: usize) -> String {
-    let start = bytes.len().saturating_sub(limit);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn bounded_tail_keeps_the_end() {
-        assert_eq!(bounded_tail(b"abcdef", 3), "def");
+        let (bytes, truncated) =
+            command_output::read_tail_stream(Cursor::new(b"abcdef"), 3).unwrap();
+        assert_eq!(bytes, b"def");
+        assert!(truncated);
     }
 }
