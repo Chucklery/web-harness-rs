@@ -10,6 +10,7 @@ pub const PROTECTED_GLOBS: &[&str] = &[
     "!**/*credentials*",
     "!**/*private*",
     "!**/*secret*",
+    "!**/*password*",
     "!**/.ssh/**",
 ];
 
@@ -19,6 +20,14 @@ pub fn is_protected(path: impl AsRef<Path>) -> bool {
         .components()
         .any(|component| component.as_os_str() == ".ssh")
     {
+        return true;
+    }
+    if path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("secret" | "secrets" | "credentials" | "private" | "password" | "passwords")
+        )
+    }) {
         return true;
     }
     let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -66,6 +75,8 @@ mod tests {
         assert!(is_protected("config/private_key.pem"));
         assert!(is_protected(".ssh/id_ed25519"));
         assert!(is_protected("credentials.json"));
+        assert!(is_protected("secrets/config.json"));
+        assert!(is_protected("private/config.toml"));
         assert!(!is_protected(".env.example"));
         assert!(!is_protected("src/secretary.rs"));
     }

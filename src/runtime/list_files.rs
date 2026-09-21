@@ -371,8 +371,10 @@ mod tests {
     fn filters_protected_files_and_directories() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join(".ssh")).unwrap();
+        fs::create_dir(dir.path().join("secrets")).unwrap();
         fs::write(dir.path().join(".env"), "TOKEN=secret").unwrap();
         fs::write(dir.path().join(".ssh/id_ed25519"), "private").unwrap();
+        fs::write(dir.path().join("secrets/config.json"), "private").unwrap();
         fs::write(dir.path().join("visible.txt"), "visible").unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
         let mut jobs = JobManager::new();
