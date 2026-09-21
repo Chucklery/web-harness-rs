@@ -7,6 +7,7 @@ mod config;
 mod env;
 mod exec;
 mod git;
+mod job_process;
 mod jobs;
 #[cfg(feature = "release-tools")]
 mod maintenance;
