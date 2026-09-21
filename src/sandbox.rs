@@ -13,6 +13,21 @@ pub enum SandboxBackend {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPolicy {
+    Deny,
+    Outbound,
+}
+
+impl NetworkPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Outbound => "outbound",
+        }
+    }
+}
+
 impl SandboxBackend {
     pub fn detect() -> Self {
         #[cfg(target_os = "macos")]
@@ -27,6 +42,10 @@ impl SandboxBackend {
     pub fn enforced(self) -> bool {
         matches!(self, Self::MacOsSeatbelt)
     }
+}
+
+pub fn can_upgrade_network() -> bool {
+    SandboxBackend::detect().enforced() && !already_sandboxed()
 }
 
 pub fn status() -> &'static str {
@@ -45,8 +64,12 @@ pub fn already_sandboxed() -> bool {
     std::env::var_os(SANDBOX_ENV_MARKER).is_some()
 }
 
-pub fn wrap_argv(workspace: &Workspace, argv: &[String]) -> Vec<String> {
-    wrap_argv_with_state(workspace, argv, already_sandboxed())
+pub fn wrap_argv_with_network(
+    workspace: &Workspace,
+    argv: &[String],
+    network: NetworkPolicy,
+) -> Vec<String> {
+    wrap_argv_with_state(workspace, argv, already_sandboxed(), network)
 }
 
 /// Same as [`wrap_argv`] but with the "already sandboxed" decision passed in.
@@ -55,13 +78,14 @@ pub fn wrap_argv_with_state(
     workspace: &Workspace,
     argv: &[String],
     already_sandboxed: bool,
+    network: NetworkPolicy,
 ) -> Vec<String> {
     if already_sandboxed {
         return argv.to_vec();
     }
     match SandboxBackend::detect() {
         SandboxBackend::MacOsSeatbelt => {
-            let profile = macos_profile(workspace.root());
+            let profile = macos_profile(workspace.root(), network);
             let mut wrapped = Vec::with_capacity(argv.len() + 3);
             wrapped.push("/usr/bin/sandbox-exec".to_string());
             wrapped.push("-p".to_string());
@@ -74,7 +98,7 @@ pub fn wrap_argv_with_state(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_profile(workspace: &Path) -> String {
+fn macos_profile(workspace: &Path, network: NetworkPolicy) -> String {
     fn quoted(path: &Path) -> String {
         let escaped = path
             .to_string_lossy()
@@ -100,13 +124,17 @@ fn macos_profile(workspace: &Path) -> String {
             format!(" (subpath {})", quoted(&path))
         })
         .unwrap_or_default();
+    let network_rule = match network {
+        NetworkPolicy::Deny => "",
+        NetworkPolicy::Outbound => " (allow network-outbound)",
+    };
     format!(
         "(version 1) \
          (deny default) \
          (allow process*) \
          (allow signal) \
          (allow sysctl-read) \
-         (allow mach-lookup) \
+         (allow mach-lookup){network_rule} \
          (allow file-read*) \
          (allow file-write* \
            (literal \"/dev/null\") \
@@ -118,7 +146,7 @@ fn macos_profile(workspace: &Path) -> String {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn macos_profile(_workspace: &Path) -> String {
+fn macos_profile(_workspace: &Path, _network: NetworkPolicy) -> String {
     String::new()
 }
 
@@ -139,10 +167,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         let argv = vec!["/bin/echo".to_string(), "ok".to_string()];
-        let wrapped = wrap_argv_with_state(&ws, &argv, true);
+        let wrapped = wrap_argv_with_state(&ws, &argv, true, NetworkPolicy::Deny);
         assert_eq!(
             wrapped, argv,
             "wrap must be a no-op inside an outer sandbox"
+        );
+    }
+
+    #[test]
+    fn nested_sandbox_cannot_upgrade_network() {
+        assert_eq!(
+            wrap_argv_with_state(
+                &Workspace::new(tempfile::tempdir().unwrap().path()).unwrap(),
+                &["/bin/echo".into()],
+                true,
+                NetworkPolicy::Outbound,
+            ),
+            vec!["/bin/echo".to_string()]
         );
     }
 
@@ -151,10 +192,31 @@ mod tests {
     fn generated_profile_mentions_workspace_and_denies_by_default() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
-        let wrapped = wrap_argv_with_state(&ws, &["/bin/echo".into(), "ok".into()], false);
+        let wrapped = wrap_argv_with_state(
+            &ws,
+            &["/bin/echo".into(), "ok".into()],
+            false,
+            NetworkPolicy::Deny,
+        );
         assert_eq!(wrapped[0], "/usr/bin/sandbox-exec");
         assert!(wrapped[2].contains("(deny default)"));
         assert!(wrapped[2].contains(&dir.path().display().to_string()));
         assert!(wrapped[2].contains("/dev/null"));
+        assert!(!wrapped[2].contains("network-outbound"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn outbound_profile_only_adds_outbound_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let wrapped = wrap_argv_with_state(
+            &ws,
+            &["/bin/echo".into(), "ok".into()],
+            false,
+            NetworkPolicy::Outbound,
+        );
+        assert!(wrapped[2].contains("(allow network-outbound)"));
+        assert!(!wrapped[2].contains("(allow network*)"));
     }
 }

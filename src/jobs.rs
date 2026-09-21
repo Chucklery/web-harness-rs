@@ -1,5 +1,6 @@
 use crate::job_process::{read_tail, spawn_job, terminate, SpawnedProcess};
 use crate::redact;
+use crate::sandbox::NetworkPolicy;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -136,6 +137,7 @@ impl JobManager {
         }
     }
 
+    #[cfg(any(test, feature = "release-tools"))]
     pub fn run_foreground(
         &self,
         workspace: &Workspace,
@@ -144,7 +146,26 @@ impl JobManager {
         timeout_ms: Option<u64>,
         sandboxed: bool,
     ) -> Result<ExecResult, JobError> {
-        let spawned = spawn_job(workspace, argv, cwd, sandboxed)?;
+        self.run_foreground_with_network(
+            workspace,
+            argv,
+            cwd,
+            timeout_ms,
+            sandboxed,
+            NetworkPolicy::Deny,
+        )
+    }
+
+    pub fn run_foreground_with_network(
+        &self,
+        workspace: &Workspace,
+        argv: &[String],
+        cwd: Option<&str>,
+        timeout_ms: Option<u64>,
+        sandboxed: bool,
+        network: NetworkPolicy,
+    ) -> Result<ExecResult, JobError> {
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network)?;
         let SpawnedProcess {
             mut child,
             artifacts,
@@ -176,6 +197,7 @@ impl JobManager {
         })
     }
 
+    #[cfg(test)]
     pub fn start(
         &mut self,
         workspace: &Workspace,
@@ -183,11 +205,22 @@ impl JobManager {
         cwd: Option<&str>,
         sandboxed: bool,
     ) -> Result<JobStatus, JobError> {
+        self.start_with_network(workspace, argv, cwd, sandboxed, NetworkPolicy::Deny)
+    }
+
+    pub fn start_with_network(
+        &mut self,
+        workspace: &Workspace,
+        argv: &[String],
+        cwd: Option<&str>,
+        sandboxed: bool,
+        network: NetworkPolicy,
+    ) -> Result<JobStatus, JobError> {
         self.refresh();
         if self.jobs.values().filter(|job| job.is_running()).count() >= MAX_BACKGROUND_JOBS {
             return Err(JobError::Limit);
         }
-        let spawned = spawn_job(workspace, argv, cwd, sandboxed)?;
+        let spawned = spawn_job(workspace, argv, cwd, sandboxed, network)?;
         let id = format!(
             "job_{}_{}",
             std::process::id(),
@@ -582,7 +615,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         let argv = vec!["/bin/echo".to_string(), "ok".to_string()];
-        let wrapped = sandbox::wrap_argv_with_state(&ws, &argv, true);
+        let wrapped = sandbox::wrap_argv_with_state(&ws, &argv, true, NetworkPolicy::Deny);
         assert_eq!(wrapped, argv);
     }
 

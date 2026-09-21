@@ -51,6 +51,8 @@ Direct Git commands sent through exec are classified before spawn and use the sa
 
 On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
 
+Network policy is per execution and defaults to `deny`. `outbound` adds only Seatbelt's outbound-network permission and always requires a one-time approval bound to the exact argv, cwd, background mode, capability, and network policy. The upgrade is rejected when no native sandbox backend can enforce it; there is no unsandboxed network mode.
+
 The macOS profile allows writes only inside the workspace, TMPDIR, `/tmp`, `/private/tmp`, and `/dev/null`. `/dev/null` is granted explicitly because shells, Git, and most compiler and build toolchains open it unconditionally; without it `git status` and similar commands fail with `Operation not permitted`.
 
 Child processes receive a `WEB_HARNESS_SANDBOX` marker. If web-harness execution itself runs inside a web-harness sandbox, the marker prevents a second Seatbelt profile from being applied — macOS rejects nested `sandbox-exec` with `sandbox_apply: Operation not permitted`, which previously broke `cargo test` run through `exec`. The marker suppresses re-wrapping only; the outer sandbox remains enforced.

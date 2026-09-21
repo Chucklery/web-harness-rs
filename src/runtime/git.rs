@@ -2,6 +2,7 @@ use super::context::ExecutionContext;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::git::{self, GitError};
 use crate::permission::{Capability, ExecAuthorization};
+use crate::sandbox::NetworkPolicy;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,7 @@ impl RuntimeTool for GitRuntime {
                     argv,
                     cwd: Some(".".into()),
                     background: false,
+                    network: NetworkPolicy::Deny,
                 };
                 if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                     context

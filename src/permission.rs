@@ -1,3 +1,4 @@
+use crate::sandbox::NetworkPolicy;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ pub enum Capability {
     GitRead,
     GitLocalWrite,
     GitRemoteWrite,
+    NetworkOutbound,
 }
 
 impl Capability {
@@ -29,13 +31,17 @@ impl Capability {
             Self::GitRead => "git.read",
             Self::GitLocalWrite => "git.local.write",
             Self::GitRemoteWrite => "git.remote.write",
+            Self::NetworkOutbound => "network.outbound",
         }
     }
 
     pub fn requires_approval(self) -> bool {
         matches!(
             self,
-            Self::ProcessExecute | Self::GitLocalWrite | Self::GitRemoteWrite
+            Self::ProcessExecute
+                | Self::GitLocalWrite
+                | Self::GitRemoteWrite
+                | Self::NetworkOutbound
         )
     }
 }
@@ -46,6 +52,7 @@ pub struct ExecAuthorization {
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub background: bool,
+    pub network: NetworkPolicy,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +186,7 @@ impl PermissionEngine {
             None => hasher.update([0]),
         }
         hasher.update([request.background as u8]);
+        hasher.update(request.network.as_str().as_bytes());
         hasher.finalize().into()
     }
 
@@ -198,6 +206,7 @@ mod tests {
             argv: argv.iter().map(|value| value.to_string()).collect(),
             cwd: Some(".".into()),
             background: false,
+            network: NetworkPolicy::Deny,
         }
     }
 
@@ -290,6 +299,25 @@ mod tests {
             engine.consume_exec(&ticket.id, &approved),
             Err(PermissionError::NotFound)
         ));
+    }
+
+    #[test]
+    fn network_policy_mismatch_does_not_consume_ticket() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut approved = request(&["cargo", "fetch"]);
+        approved.capability = Capability::NetworkOutbound;
+        approved.network = NetworkPolicy::Outbound;
+        let ticket = request_ticket(&mut engine, &approved);
+        engine.approve(&ticket.id).unwrap();
+
+        let mut denied_network = approved.clone();
+        denied_network.network = NetworkPolicy::Deny;
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &denied_network),
+            Err(PermissionError::Mismatch)
+        ));
+
+        engine.consume_exec(&ticket.id, &approved).unwrap();
     }
 
     #[test]

@@ -26,6 +26,8 @@ Runtime 调用统一接收 `ExecutionContext`，其中包含工作区边界、Sa
 
 权限模型使用显式 Capability，例如 `workspace.read`、`workspace.write`、`process.execute`、`job.control`、`git.read`、`git.local.write` 与 `git.remote.write`。一次性审批票据同时绑定 Capability 与精确命令参数，不能把低权限审批复用于更高权限操作。
 
+执行网络策略也属于同一个审批摘要。默认策略是 deny；仅出站的 Seatbelt profile 需要独立的一次性审批，没有原生 backend 时拒绝该升级，而不是静默运行未沙箱化的网络命令。
+
 票据只在授权成功时被消费。过期会使其失效，Deny 会显式删除票据。若请求不匹配（Capability、argv、cwd 或 background 任一不符），则报错但不消费票据——被拒绝的请求并未使用这次授权，因此在五分钟有效期内用正确参数重试仍然成功。
 
 Sandbox 状态被拆成三个独立事实，而不是压成一个 bool：当前平台是否*可用*原生后端、当前进程是否*已经处于* sandbox 中、本次调用是否*需要*再包一层。已经运行在 web-harness Seatbelt profile 内的进程仍然被视为已沙箱化，只是不再叠加第二个 `sandbox-exec`——macOS 拒绝的正是嵌套应用。可用性与生效性不会合并成同一个标志。

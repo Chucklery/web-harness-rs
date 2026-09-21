@@ -3,6 +3,7 @@ use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::command_policy::{self, CommandRisk};
 use crate::exec;
 use crate::permission::{Capability, ExecAuthorization};
+use crate::sandbox::NetworkPolicy;
 use serde_json::{json, Value};
 
 const MAX_ARGV_ITEMS: usize = 64;
@@ -60,18 +61,42 @@ impl RuntimeTool for ExecRuntime {
             ));
         }
 
-        let capability = match command_policy::command_risk(&argv) {
-            Some(CommandRisk::GitLocalWrite) => Capability::GitLocalWrite,
-            Some(CommandRisk::GitRemoteWrite) => Capability::GitRemoteWrite,
-            None => Capability::ProcessExecute,
+        let network = match arguments
+            .get("network")
+            .and_then(Value::as_str)
+            .unwrap_or("deny")
+        {
+            "deny" => NetworkPolicy::Deny,
+            "outbound" => NetworkPolicy::Outbound,
+            _ => {
+                return Err(RuntimeToolError::new(
+                    RuntimeErrorKind::InvalidArguments,
+                    "network must be deny or outbound",
+                ))
+            }
+        };
+
+        let sandbox = context.sandbox();
+        if network == NetworkPolicy::Outbound && !crate::sandbox::can_upgrade_network() {
+            return Err(RuntimeToolError::new(
+                RuntimeErrorKind::Permission,
+                "outbound network is unavailable without a native sandbox backend",
+            ));
+        }
+
+        let capability = match (command_policy::command_risk(&argv), network) {
+            (Some(CommandRisk::GitLocalWrite), _) => Capability::GitLocalWrite,
+            (Some(CommandRisk::GitRemoteWrite), _) => Capability::GitRemoteWrite,
+            (None, NetworkPolicy::Outbound) => Capability::NetworkOutbound,
+            (None, NetworkPolicy::Deny) => Capability::ProcessExecute,
         };
         let authorization = ExecAuthorization {
             capability,
             argv: argv.clone(),
             cwd: cwd.map(ToOwned::to_owned),
             background,
+            network,
         };
-        let sandbox = context.sandbox();
         if capability.requires_approval()
             && (capability != Capability::ProcessExecute || !sandbox.enforced())
         {
@@ -91,6 +116,10 @@ impl RuntimeTool for ExecRuntime {
                     Capability::GitRemoteWrite => (
                         "Run Git push through exec".to_string(),
                         "Direct Git push may change a remote repository and requires explicit one-time approval".to_string(),
+                    ),
+                    Capability::NetworkOutbound => (
+                        format!("Run {} with outbound network", argv.first().map(String::as_str).unwrap_or("?")),
+                        "Outbound network is denied by default and requires explicit one-time approval".to_string(),
                     ),
                     _ => (
                         format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
@@ -112,10 +141,17 @@ impl RuntimeTool for ExecRuntime {
         let workspace = context.workspace().clone();
         let value = if background {
             serde_json::to_value(
-                exec::background(context.jobs(), &workspace, &argv, cwd, sandbox.enforced())
-                    .map_err(|error| {
-                        RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
-                    })?,
+                exec::background(
+                    context.jobs(),
+                    &workspace,
+                    &argv,
+                    cwd,
+                    sandbox.enforced(),
+                    network,
+                )
+                .map_err(|error| {
+                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+                })?,
             )
         } else {
             serde_json::to_value(
@@ -126,6 +162,7 @@ impl RuntimeTool for ExecRuntime {
                     cwd,
                     timeout_ms,
                     sandbox.enforced(),
+                    network,
                 )
                 .map_err(|error| {
                     RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
@@ -178,5 +215,22 @@ mod tests {
             .unwrap();
         assert_eq!(remote["status"], "approval_required");
         assert_eq!(remote["capability"], "git.remote.write");
+    }
+
+    #[test]
+    fn rejects_unknown_network_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let error = ExecRuntime
+            .call(
+                &mut context,
+                &json!({"argv": ["cargo", "check"], "network": "internet"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
     }
 }

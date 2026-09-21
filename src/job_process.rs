@@ -3,6 +3,7 @@ use crate::env;
 use crate::jobs::JobError;
 use crate::process;
 use crate::sandbox;
+use crate::sandbox::NetworkPolicy;
 use crate::workspace::Workspace;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -60,6 +61,7 @@ pub(crate) fn spawn_job(
     argv: &[String],
     cwd: Option<&str>,
     sandboxed: bool,
+    network: NetworkPolicy,
 ) -> Result<SpawnedProcess, JobError> {
     validate_argv(argv)?;
     let cwd = match cwd {
@@ -68,7 +70,7 @@ pub(crate) fn spawn_job(
     };
     let artifacts = OutputArtifacts::create()?;
     let effective_argv = if sandboxed {
-        sandbox::wrap_argv(workspace, argv)
+        sandbox::wrap_argv_with_network(workspace, argv, network)
     } else {
         argv.to_vec()
     };

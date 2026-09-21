@@ -55,6 +55,8 @@ Permissions use explicit capabilities such as `workspace.read`, `workspace.write
 
 Ticket consumption happens only on a successful authorization. Expiry invalidates a ticket; denial removes it explicitly. A mismatching request — wrong capability, wrong argv, wrong cwd, or wrong background mode — fails without consuming the ticket, because a rejected request has not used the approval it was issued for. A retry with the correct payload therefore still succeeds within the five-minute window.
 
+Execution network policy is part of the same approval digest. The default is deny; an outbound-only Seatbelt profile requires a distinct one-time approval, and systems without a native backend reject that upgrade rather than silently running unsandboxed.
+
 Sandbox state is tracked as three distinct facts rather than a single boolean: whether a native backend is *available*, whether a sandbox is *already enforced* on the current process, and whether the current call *needs wrapping*. A process that is already inside a web-harness Seatbelt profile is still reported as sandboxed even though no second `sandbox-exec` is applied — nested application is what macOS rejects. Availability and enforcement are never collapsed into one flag.
 
 Git has its own runtime policy and never routes through the generic exec sandbox. Read-only operations (`status`, `diff`, `log`, `show`) use `git.read`; local mutations (`add`, `commit`, `switch`, `restore`) use `git.local.write`; `push` uses `git.remote.write`. Local and remote mutations require distinct one-time approval-bound command payloads.
@@ -80,4 +82,3 @@ The default binary contains only the normal setup/connect/MCP execution path. Lo
 Source layout follows the same boundary: normal runtime modules remain directly under `src/`, while opt-in benchmark and release validation code lives under `src/maintenance/`.
 
 Runtime state must remain bounded. Background execution limits both concurrently running Jobs and retained completed Job metadata/output; old completed Jobs are evicted together with their temporary log artifacts. New capabilities should prefer the same pattern: one canonical runtime path, bounded state, and opt-in compilation for functionality normal users do not need.
-

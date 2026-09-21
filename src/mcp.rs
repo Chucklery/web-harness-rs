@@ -146,6 +146,7 @@ fn handle(
                         "cwd": {"type": "string"},
                         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
                         "background": {"type": "boolean"},
+                        "network": {"type": "string", "enum": ["deny", "outbound"], "default": "deny"},
                         "approval_id": {"type": "string"}
                     },
                     "required": ["argv"],

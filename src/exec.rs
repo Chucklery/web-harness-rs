@@ -1,4 +1,5 @@
 use crate::jobs::{ExecResult, JobError, JobManager, JobStatus};
+use crate::sandbox::NetworkPolicy;
 use crate::workspace::Workspace;
 
 pub fn foreground(
@@ -8,8 +9,9 @@ pub fn foreground(
     cwd: Option<&str>,
     timeout_ms: Option<u64>,
     sandboxed: bool,
+    network: NetworkPolicy,
 ) -> Result<ExecResult, JobError> {
-    manager.run_foreground(workspace, argv, cwd, timeout_ms, sandboxed)
+    manager.run_foreground_with_network(workspace, argv, cwd, timeout_ms, sandboxed, network)
 }
 
 pub fn background(
@@ -18,6 +20,7 @@ pub fn background(
     argv: &[String],
     cwd: Option<&str>,
     sandboxed: bool,
+    network: NetworkPolicy,
 ) -> Result<JobStatus, JobError> {
-    manager.start(workspace, argv, cwd, sandboxed)
+    manager.start_with_network(workspace, argv, cwd, sandboxed, network)
 }
