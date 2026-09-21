@@ -3,6 +3,7 @@ use super::exec::ExecRuntime;
 use super::file::FileRuntime;
 use super::git::GitRuntime;
 use super::job::JobRuntime;
+use super::list_files::ListFilesRuntime;
 use super::patch::PatchRuntime;
 use super::permission::PermissionRuntime;
 use super::search::SearchRuntime;
@@ -62,6 +63,7 @@ impl Default for RuntimeRegistry {
         registry.register(SearchRuntime);
         registry.register(ExecRuntime);
         registry.register(JobRuntime);
+        registry.register(ListFilesRuntime);
         registry.register(GitRuntime);
         registry.register(WorkspaceInfoRuntime);
         registry.register(WorkspaceInstructionsRuntime);
@@ -87,6 +89,7 @@ mod tests {
         assert!(registry.tools.contains_key("workspace_instructions"));
         assert!(registry.tools.contains_key("patch"));
         assert!(registry.tools.contains_key("permission"));
-        assert_eq!(registry.len(), 9);
+        assert!(registry.tools.contains_key("list_files"));
+        assert_eq!(registry.len(), 10);
     }
 }

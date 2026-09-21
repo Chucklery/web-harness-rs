@@ -43,6 +43,7 @@ fn stdio_mcp_initializes_and_lists_core_tools() {
     for expected in [
         "workspace_info",
         "read_files",
+        "list_files",
         "search",
         "workspace_instructions",
         "patch",

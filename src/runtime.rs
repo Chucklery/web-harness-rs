@@ -3,6 +3,7 @@ pub(crate) mod exec;
 pub(crate) mod file;
 pub(crate) mod git;
 pub(crate) mod job;
+pub(crate) mod list_files;
 pub(crate) mod manifest;
 pub(crate) mod patch;
 pub(crate) mod permission;

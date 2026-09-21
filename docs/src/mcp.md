@@ -27,6 +27,10 @@ Current limits:
 - 512 KiB total per batch
 - all paths must remain inside the workspace
 
+## list_files
+
+Lists sorted workspace-relative files, directories, and symlinks without executing a shell command. It defaults to Git-tracked paths and supports bounded pagination, an `all` source, and a simple include glob. If enumeration itself hits its hard scan bound, the result is marked truncated and does not provide a continuation offset.
+
 ## search
 
 Uses the system ripgrep binary and returns at most 200 bounded matches.

@@ -96,6 +96,21 @@ fn handle(
                 }
             },
             {
+                "name": "list_files",
+                "description": "List bounded workspace files and directories without executing a shell command.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "source": {"type": "string", "enum": ["tracked", "all"], "default": "tracked"},
+                        "offset": {"type": "integer", "minimum": 0},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+                        "include": {"type": "string", "maxLength": 256}
+                    },
+                    "additionalProperties": false
+                }
+            },
+            {
                 "name": "search",
                 "description": "Search workspace content using ripgrep with bounded results.",
                 "inputSchema": {

@@ -23,6 +23,10 @@ Exec 使用 argv 形式，不提供 shell 字符串模式。命令在启动前�
 
 通过 exec 直接运行的 Git 命令会在启动前分类，并复用结构化 Git 的审批 capability：`git push` 需要 `git.remote.write`，其他直接 Git 调用保守地要求 `git.local.write`。已批准的普通程序或包装器仍可能修改 sandbox 内的工作区，因此通用进程审批本身授予工作区范围内的执行权限。
 
+## list_files
+
+在不执行 shell 的情况下列出排序后的工作区相对路径、文件、目录和符号链接。默认只列 Git tracked 路径，也支持有界分页、`all` 数据源和简单 include glob。如果枚举本身触发硬扫描上限，结果会标记为 truncated，并且不会伪造可继续的 offset。
+
 macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区、TMPDIR、`/tmp`、`/private/tmp` 与 `/dev/null`。`/dev/null` 需要显式放行：shell、Git 以及大多数编译器与构建工具链都会无条件打开它，否则 `git status` 这类命令会直接以 `Operation not permitted` 失败。
 
 网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并且必须使用绑定确切 argv、cwd、后台模式、capability 和网络策略的一次性审批。没有原生 sandbox backend 时会拒绝该升级，不提供 unsandboxed 网络模式。

@@ -10,6 +10,7 @@ pub struct RuntimeLimits {
     pub max_read_batch_bytes: usize,
     pub max_search_queries: usize,
     pub max_search_results: usize,
+    pub max_list_files: usize,
 }
 
 impl Default for RuntimeLimits {
@@ -20,6 +21,7 @@ impl Default for RuntimeLimits {
             max_read_batch_bytes: 512 * 1024,
             max_search_queries: 8,
             max_search_results: 200,
+            max_list_files: 200,
         }
     }
 }
