@@ -269,12 +269,14 @@ pub fn status() -> Result<UserStatus, RuntimeError> {
     };
     if !process::process_alive(state.tunnel_pid) {
         remove_state()?;
-        return Ok(UserStatus::disconnected(
+        let mut status = UserStatus::disconnected(
             configured,
             true,
             Some(state.workspace),
             "stale connection state was cleaned up",
-        ));
+        );
+        status.denied_paths = denied;
+        return Ok(status);
     }
     let state_denied = if state.denied_paths.is_empty() {
         denied
