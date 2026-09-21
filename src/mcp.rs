@@ -177,11 +177,13 @@ fn handle(
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["poll", "output", "cancel"]},
+                        "action": {"type": "string", "enum": ["poll", "wait", "output", "cancel", "list"]},
                         "id": {"type": "string"},
-                        "stream": {"type": "string", "enum": ["stdout", "stderr"]}
+                        "stream": {"type": "string", "enum": ["stdout", "stderr"]},
+                        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000},
+                        "cursor": {"type": "integer", "minimum": 0}
                     },
-                    "required": ["action", "id"],
+                    "required": ["action"],
                     "additionalProperties": false
                 }
             },

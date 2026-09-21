@@ -69,7 +69,7 @@ Foreground commands have a maximum 10 minute timeout and bounded stdout/stderr r
 
 ## job
 
-Polls, cancels, or reads bounded stdout/stderr tails from background jobs. Job output spills to temporary files instead of growing without bound in memory. Owned process groups are terminated when the host exits.
+Polls, waits for, lists, cancels, or reads bounded stdout/stderr tails from background jobs. The output action accepts a byte cursor for incremental reads and returns the next cursor. Job output spills to temporary files instead of growing without bound in memory. Owned process groups are terminated when the host exits.
 
 ## git
 

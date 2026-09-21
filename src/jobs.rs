@@ -5,6 +5,7 @@ use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +16,7 @@ const MAX_BACKGROUND_JOBS: usize = 2;
 const MAX_RETAINED_COMPLETED_JOBS: usize = 4;
 const OUTPUT_TAIL_BYTES: usize = 256 * 1024;
 const MAX_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_WAIT: Duration = Duration::from_secs(60);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -47,6 +49,13 @@ pub struct JobStatus {
     pub id: String,
     pub state: String,
     pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobOutputChunk {
+    pub text: String,
+    pub next_cursor: u64,
+    pub truncated: bool,
 }
 
 struct Job {
@@ -264,6 +273,59 @@ impl JobManager {
         Ok((redact::text(&text), truncated))
     }
 
+    pub fn output_from(
+        &self,
+        id: &str,
+        stream: &str,
+        cursor: u64,
+    ) -> Result<JobOutputChunk, JobError> {
+        let job = self
+            .jobs
+            .get(id)
+            .ok_or_else(|| JobError::NotFound(id.to_string()))?;
+        let path = match stream {
+            "stdout" => &job.stdout_path,
+            "stderr" => &job.stderr_path,
+            _ => return Err(JobError::Invalid("stream must be stdout or stderr".into())),
+        };
+        let mut file = fs::File::open(path)?;
+        let length = file.metadata()?.len();
+        let cursor = cursor.min(length);
+        file.seek(SeekFrom::Start(cursor))?;
+        let remaining = (length - cursor) as usize;
+        let limit = OUTPUT_TAIL_BYTES.min(remaining);
+        let mut bytes = vec![0; limit];
+        file.read_exact(&mut bytes)?;
+        Ok(JobOutputChunk {
+            text: redact::text(&String::from_utf8_lossy(&bytes)),
+            next_cursor: cursor + limit as u64,
+            truncated: remaining > limit,
+        })
+    }
+
+    pub fn wait(&mut self, id: &str, timeout_ms: Option<u64>) -> Result<JobStatus, JobError> {
+        let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000)).min(MAX_WAIT);
+        let start = Instant::now();
+        loop {
+            let status = self.poll(id)?;
+            if status.state != "running" || start.elapsed() >= timeout {
+                return Ok(status);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    pub fn list(&mut self) -> Vec<JobStatus> {
+        self.refresh();
+        let mut statuses = self
+            .jobs
+            .iter()
+            .map(|(id, job)| job.status(id))
+            .collect::<Vec<_>>();
+        statuses.sort_by(|left, right| left.id.cmp(&right.id));
+        statuses
+    }
+
     fn refresh(&mut self) {
         let ids: Vec<_> = self.jobs.keys().cloned().collect();
         for id in ids {
@@ -397,6 +459,26 @@ mod tests {
         }
         let (output, _) = manager.output(&started.id, "stdout").unwrap();
         assert_eq!(output, "done");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_and_output_cursor_observe_one_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["printf".into(), "abcdef".into()], None, false)
+            .unwrap();
+        assert_eq!(
+            manager.wait(&started.id, Some(2_000)).unwrap().state,
+            "exited"
+        );
+        let chunk = manager.output_from(&started.id, "stdout", 0).unwrap();
+        assert_eq!(chunk.text, "abcdef");
+        assert_eq!(chunk.next_cursor, 6);
+        assert!(!chunk.truncated);
+        assert_eq!(manager.list().len(), 1);
     }
 
     #[cfg(unix)]

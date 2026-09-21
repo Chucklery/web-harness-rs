@@ -31,6 +31,11 @@ impl RuntimeTool for JobRuntime {
                     "arguments.action is required",
                 )
             })?;
+        if action == "list" {
+            return serde_json::to_value(context.jobs().list()).map_err(|error| {
+                RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+            });
+        }
         let id = arguments.get("id").and_then(Value::as_str).ok_or_else(|| {
             RuntimeToolError::new(
                 RuntimeErrorKind::InvalidArguments,
@@ -47,15 +52,40 @@ impl RuntimeTool for JobRuntime {
                 RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
             })?)
             .map_err(|error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())),
+            "wait" => {
+                let timeout_ms = arguments.get("timeout_ms").and_then(Value::as_u64);
+                serde_json::to_value(context.jobs().wait(id, timeout_ms).map_err(|error| {
+                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+                })?)
+                .map_err(|error| {
+                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+                })
+            }
             "output" => {
                 let stream = arguments
                     .get("stream")
                     .and_then(Value::as_str)
                     .unwrap_or("stdout");
-                let (text, truncated) = context.jobs().output(id, stream).map_err(|error| {
-                    RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
-                })?;
-                Ok(json!({"stream": stream, "text": text, "truncated": truncated}))
+                if let Some(cursor) = arguments.get("cursor").and_then(Value::as_u64) {
+                    let chunk =
+                        context
+                            .jobs()
+                            .output_from(id, stream, cursor)
+                            .map_err(|error| {
+                                RuntimeToolError::new(
+                                    RuntimeErrorKind::Execution,
+                                    error.to_string(),
+                                )
+                            })?;
+                    Ok(
+                        json!({"stream": stream, "text": chunk.text, "truncated": chunk.truncated, "next_cursor": chunk.next_cursor}),
+                    )
+                } else {
+                    let (text, truncated) = context.jobs().output(id, stream).map_err(|error| {
+                        RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+                    })?;
+                    Ok(json!({"stream": stream, "text": text, "truncated": truncated}))
+                }
             }
             _ => Err(RuntimeToolError::new(
                 RuntimeErrorKind::InvalidArguments,
