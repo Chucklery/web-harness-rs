@@ -11,22 +11,36 @@ pub const PROTECTED_GLOBS: &[&str] = &[
     "!**/*private*",
     "!**/*secret*",
     "!**/*password*",
+    "!**/.netrc",
+    "!**/.npmrc",
+    "!**/.pypirc",
+    "!**/.docker/config.json",
     "!**/.ssh/**",
 ];
 
 pub fn is_protected(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
-    if path
-        .components()
-        .any(|component| component.as_os_str() == ".ssh")
-    {
+    if path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(".ssh"))
+    }) {
         return true;
     }
     if path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some("secret" | "secrets" | "credentials" | "private" | "password" | "passwords")
-        )
+        component.as_os_str().to_str().is_some_and(|value| {
+            [
+                "secret",
+                "secrets",
+                "credentials",
+                "private",
+                "password",
+                "passwords",
+            ]
+            .iter()
+            .any(|name| value.eq_ignore_ascii_case(name))
+        })
     }) {
         return true;
     }
@@ -48,6 +62,17 @@ pub fn is_protected(path: impl AsRef<Path>) -> bool {
         || has_token(&name, "password")
         || name.starts_with("id_rsa")
         || name.starts_with("id_ed25519")
+        || name.starts_with("id_ecdsa")
+        || name.starts_with("id_dsa")
+        || matches!(name.as_str(), ".netrc" | ".npmrc" | ".pypirc")
+    {
+        return true;
+    }
+    if name == "config.json"
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|parent| parent.eq_ignore_ascii_case(".docker"))
     {
         return true;
     }
@@ -77,6 +102,10 @@ mod tests {
         assert!(is_protected("credentials.json"));
         assert!(is_protected("secrets/config.json"));
         assert!(is_protected("private/config.toml"));
+        assert!(is_protected("Secrets/Config.json"));
+        assert!(is_protected(".npmrc"));
+        assert!(is_protected(".docker/config.json"));
+        assert!(is_protected(".ssh/id_ecdsa"));
         assert!(!is_protected(".env.example"));
         assert!(!is_protected("src/secretary.rs"));
     }
