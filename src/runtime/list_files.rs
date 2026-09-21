@@ -218,7 +218,10 @@ fn all_entries(
                     });
                 }
             }
-            if kind == FileKind::Directory && context.workspace().resolve(&relative_text).is_ok() {
+            if kind == FileKind::Directory
+                && !path_policy::is_protected(&relative_text)
+                && context.workspace().resolve(&relative_text).is_ok()
+            {
                 pending.push(item_path);
             }
         }
@@ -363,5 +366,30 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn filters_protected_files_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(".ssh")).unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=secret").unwrap();
+        fs::write(dir.path().join(".ssh/id_ed25519"), "private").unwrap();
+        fs::write(dir.path().join("visible.txt"), "visible").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let value = ListFilesRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"source":"all"}),
+            )
+            .unwrap();
+        let paths = value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["path"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec!["visible.txt"]);
     }
 }
