@@ -1,5 +1,7 @@
 use super::context::ExecutionContext;
+use super::protected;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
+use crate::path_policy;
 use crate::permission::Capability;
 use crate::search::{self, SearchError};
 use serde_json::{json, Value};
@@ -46,7 +48,33 @@ impl RuntimeTool for SearchRuntime {
             ));
         }
 
-        let options = parse_options(arguments)?;
+        let mut options = parse_options(arguments)?;
+
+        if path_policy::is_protected(&options.scope) {
+            let mut authorization_argv = vec!["search".into(), options.scope.clone()];
+            if let Some(query) = query {
+                authorization_argv.push(query.to_string());
+            } else if let Some(queries) = queries {
+                authorization_argv.extend(
+                    queries
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned),
+                );
+            }
+            let authorization = protected::authorization(authorization_argv, true);
+            let protected_paths = vec![options.scope.clone()];
+            if let Some(pending) = protected::authorize_or_request(
+                context,
+                arguments.get("approval_id").and_then(Value::as_str),
+                &authorization,
+                "Search a protected workspace path",
+                &protected_paths,
+            )? {
+                return Ok(pending);
+            }
+            options.allow_protected = true;
+        }
 
         if queries.is_some() && options.offset != 0 {
             return Err(invalid(
@@ -149,6 +177,7 @@ fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeTool
         exclude,
         mode,
         offset: offset as usize,
+        allow_protected: false,
     })
 }
 
@@ -257,6 +286,20 @@ mod tests {
     fn failed_searches_stay_execution_errors() {
         let error = search_error(SearchError::Failed("boom".to_string()));
         assert_eq!(error.kind(), RuntimeErrorKind::Execution);
+    }
+
+    #[test]
+    fn protected_scope_requires_explicit_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let result = SearchRuntime
+            .call(&mut context, &json!({"query": "TOKEN", "scope": ".env"}))
+            .unwrap();
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "workspace.sensitive.read");
     }
 
     #[test]

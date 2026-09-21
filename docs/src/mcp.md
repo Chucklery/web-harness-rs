@@ -47,6 +47,8 @@ Search also accepts a workspace-relative `scope`, literal mode, bounded include/
 
 Single-query searches accept an `offset` continuation and return `next_offset`; keep the query, scope, glob filters, mode, and result limit unchanged when continuing. If ripgrep output itself reaches its hard bound, the result is marked truncated without a continuation.
 
+An explicit search scope that is itself protected requires the same one-time approval as a protected file read; ordinary workspace-wide searches continue to filter protected paths.
+
 ## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.

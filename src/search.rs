@@ -53,6 +53,7 @@ pub struct SearchOptions {
     pub exclude: Vec<String>,
     pub mode: SearchMode,
     pub offset: usize,
+    pub allow_protected: bool,
 }
 
 impl Default for SearchOptions {
@@ -64,6 +65,7 @@ impl Default for SearchOptions {
             exclude: Vec::new(),
             mode: SearchMode::Matches,
             offset: 0,
+            allow_protected: false,
         }
     }
 }
@@ -125,8 +127,10 @@ pub fn search(
     for exclude in &options.exclude {
         command.args(["--glob", &format!("!{exclude}")]);
     }
-    for exclude in path_policy::PROTECTED_GLOBS {
-        command.args(["--glob", exclude]);
+    if !options.allow_protected {
+        for exclude in path_policy::PROTECTED_GLOBS {
+            command.args(["--glob", exclude]);
+        }
     }
     command
         .arg("--")

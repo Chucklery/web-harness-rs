@@ -126,6 +126,7 @@ fn handle(
                         "max_results": {"type": "integer", "minimum": 1, "maximum": 200}
                         ,"literal": {"type": "boolean", "default": false},
                         "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
+                        "approval_id": {"type": "string"},
                         "scope": {"type": "string"},
                         "include": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
                         "exclude": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
