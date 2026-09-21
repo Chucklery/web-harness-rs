@@ -53,6 +53,7 @@ pub struct ExecAuthorization {
     pub cwd: Option<String>,
     pub background: bool,
     pub network: NetworkPolicy,
+    pub expected_head: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +188,14 @@ impl PermissionEngine {
         }
         hasher.update([request.background as u8]);
         hasher.update(request.network.as_str().as_bytes());
+        match &request.expected_head {
+            Some(head) => {
+                hasher.update([1]);
+                hasher.update((head.len() as u64).to_le_bytes());
+                hasher.update(head.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
         hasher.finalize().into()
     }
 
@@ -207,6 +216,7 @@ mod tests {
             cwd: Some(".".into()),
             background: false,
             network: NetworkPolicy::Deny,
+            expected_head: None,
         }
     }
 
@@ -237,6 +247,23 @@ mod tests {
         engine.approve(&ticket.id).unwrap();
         let mut changed = request.clone();
         changed.capability = Capability::GitRemoteWrite;
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &changed),
+            Err(PermissionError::Mismatch)
+        ));
+    }
+
+    #[test]
+    fn approval_is_bound_to_expected_head() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut request = request(&["git", "commit", "--", "file.txt"]);
+        request.capability = Capability::GitLocalWrite;
+        request.expected_head = Some("abc123".into());
+        let ticket = request_ticket(&mut engine, &request);
+        engine.approve(&ticket.id).unwrap();
+
+        let mut changed = request.clone();
+        changed.expected_head = Some("def456".into());
         assert!(matches!(
             engine.consume_exec(&ticket.id, &changed),
             Err(PermissionError::Mismatch)

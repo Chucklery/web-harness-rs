@@ -97,6 +97,8 @@ Remote mutation:
 
 Every mutation requires a one-time approval bound to the exact generated Git argv. Push receives a stronger approval description because it changes a remote repository.
 
+Mutation calls may provide `expected_head`; after approval and immediately before execution, the current HEAD must still match or the operation returns a conflict.
+
 Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
 
 ## permission

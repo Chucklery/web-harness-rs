@@ -28,6 +28,13 @@ pub fn status(workspace: &Workspace) -> Result<GitResult, GitError> {
     run(workspace, &["status", "--short", "--branch"])
 }
 
+pub fn head(workspace: &Workspace) -> Result<String, GitError> {
+    Ok(run(workspace, &["rev-parse", "HEAD"])?
+        .stdout
+        .trim()
+        .to_string())
+}
+
 pub fn diff(
     workspace: &Workspace,
     staged: bool,

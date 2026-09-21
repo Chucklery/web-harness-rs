@@ -55,6 +55,11 @@ impl RuntimeTool for GitRuntime {
         let branch = arguments.get("branch").and_then(Value::as_str);
         let remote = arguments.get("remote").and_then(Value::as_str);
         let refspec = arguments.get("refspec").and_then(Value::as_str);
+        let expected_head = arguments
+            .get("expected_head")
+            .and_then(Value::as_str)
+            .map(validate_expected_head)
+            .transpose()?;
 
         match risk {
             GitRisk::ReadOnly => context
@@ -76,6 +81,7 @@ impl RuntimeTool for GitRuntime {
                     cwd: Some(".".into()),
                     background: false,
                     network: NetworkPolicy::Deny,
+                    expected_head: expected_head.clone(),
                 };
                 if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                     context
@@ -105,6 +111,15 @@ impl RuntimeTool for GitRuntime {
                         "approval": approval,
                         "risk": risk.as_str()
                     }));
+                }
+                if let Some(expected_head) = expected_head.as_deref() {
+                    let actual_head = git::head(context.workspace()).map_err(git_error)?;
+                    if actual_head != expected_head {
+                        return Err(RuntimeToolError::new(
+                            RuntimeErrorKind::Conflict,
+                            "repository HEAD changed since approval was requested",
+                        ));
+                    }
                 }
             }
         }
@@ -176,6 +191,16 @@ fn parse_pathspec(arguments: &Value) -> Result<Vec<String>, RuntimeToolError> {
         .collect()
 }
 
+fn validate_expected_head(value: &str) -> Result<String, RuntimeToolError> {
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_whitespace) {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            "expected_head must be a non-empty revision without whitespace",
+        ));
+    }
+    Ok(value.to_string())
+}
+
 fn git_error(error: GitError) -> RuntimeToolError {
     let kind = match &error {
         GitError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
@@ -221,5 +246,16 @@ mod tests {
     fn failed_git_commands_stay_execution_errors() {
         let error = git_error(GitError::Failed("boom".to_string()));
         assert_eq!(error.kind(), RuntimeErrorKind::Execution);
+    }
+
+    #[test]
+    fn expected_head_rejects_whitespace() {
+        let error = validate_expected_head("abc 123").unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn expected_head_accepts_revision_tokens() {
+        assert_eq!(validate_expected_head("abc123").unwrap(), "abc123");
     }
 }

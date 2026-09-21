@@ -96,6 +96,7 @@ impl RuntimeTool for ExecRuntime {
             cwd: cwd.map(ToOwned::to_owned),
             background,
             network,
+            expected_head: None,
         };
         if capability.requires_approval()
             && (capability != Capability::ProcessExecute || !sandbox.enforced())
