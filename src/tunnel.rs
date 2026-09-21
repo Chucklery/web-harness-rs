@@ -54,8 +54,8 @@ pub fn accept(
     workspace: &Workspace,
     command_json: Option<&str>,
 ) -> Result<TunnelReport, TunnelError> {
-    local_roundtrip(workspace)?;
     let Some(command_json) = command_json else {
+        local_roundtrip(workspace)?;
         return Ok(TunnelReport {
             passed: false,
             local_mcp_roundtrip: true,
@@ -68,12 +68,9 @@ pub fn accept(
         });
     };
 
-    let argv: Vec<String> = serde_json::from_str(command_json)?;
-    if argv.is_empty() || argv.len() > 64 || argv.iter().any(|arg| arg.len() > 16 * 1024) {
-        return Err(TunnelError::Invalid(
-            "command JSON must be a non-empty argv array with at most 64 bounded items".into(),
-        ));
-    }
+    let argv = crate::config::parse_tunnel_command(command_json)
+        .map_err(|error| TunnelError::Invalid(error.to_string()))?;
+    local_roundtrip(workspace)?;
 
     let current_exe = std::env::current_exe()?;
     let server_args = json!([
@@ -241,5 +238,13 @@ mod tests {
             command_output::read_tail_stream(Cursor::new(b"abcdef"), 3).unwrap();
         assert_eq!(bytes, b"def");
         assert!(truncated);
+    }
+
+    #[test]
+    fn accept_rejects_secret_bearing_wrapper_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let error = accept(&workspace, Some(r#"["wrapper","--token=secret"]"#)).unwrap_err();
+        assert!(error.to_string().contains("credentials"));
     }
 }
