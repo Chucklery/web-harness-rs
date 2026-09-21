@@ -9,6 +9,7 @@ pub enum RuntimeErrorKind {
     LimitExceeded,
     Execution,
     Permission,
+    Conflict,
     /// A runtime dependency the tool shells out to is missing or unusable.
     ///
     /// Kept distinct from [`RuntimeErrorKind::Execution`] because the caller

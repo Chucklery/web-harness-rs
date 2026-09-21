@@ -1,4 +1,5 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -138,6 +139,16 @@ impl Workspace {
             )));
         }
         Ok(fs::read_to_string(path)?)
+    }
+
+    pub fn read_revision(&self, relative: impl AsRef<Path>) -> Result<String, WorkspaceError> {
+        let path = self.resolve(relative)?;
+        let mut file = fs::File::open(path)?;
+        let length = file.metadata()?.len();
+        let mut digest = Sha256::new();
+        digest.update(length.to_le_bytes());
+        std::io::copy(&mut file, &mut digest)?;
+        Ok(format!("sha256:{:x}", digest.finalize()))
     }
 
     pub fn discover_agents(

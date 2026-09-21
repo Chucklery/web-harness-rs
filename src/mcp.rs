@@ -90,7 +90,7 @@ fn handle(
                 "description": "Read UTF-8 files inside the workspace with bounded size.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16}},
+                    "properties": {"paths": {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "expected_read_revision": {"type": "string", "maxLength": 128}}, "required": ["path"], "additionalProperties": false}]}, "minItems": 1, "maxItems": 16}},
                     "required": ["paths"],
                     "additionalProperties": false
                 }
@@ -324,6 +324,11 @@ fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
             "git" => -32041,
             "patch" => -32022,
             _ => -32033,
+        },
+        RuntimeErrorKind::Conflict => match tool {
+            "read_files" => -32023,
+            "patch" => -32024,
+            _ => -32003,
         },
         // Distinct from Execution so a client can tell "the environment cannot
         // serve this" from "this request failed", without parsing prose.
