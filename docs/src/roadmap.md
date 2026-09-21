@@ -30,7 +30,7 @@ Status: structured add/update/delete patching is implemented. Compact Git diff r
 - timeout and cancellation
 - process group handling
 
-Status: implemented for argv-based execution; shell-string mode is intentionally omitted.
+Status: implemented for argv-based execution and an explicitly approved, bounded one-shot script mode; interactive shell-string mode and PTY sessions are intentionally omitted.
 
 ## Stage 5
 
@@ -38,13 +38,13 @@ Status: implemented for argv-based execution; shell-string mode is intentionally
 - bounded in-memory output
 - disk spill artifacts
 
-Status: implemented for host-owned jobs with bounded returned tails and temporary-file spill.
+Status: implemented for host-owned jobs with bounded returned tails, temporary-file spill, output cursors, bounded waits, and optional one-shot stdin.
 
 ## Stage 6
 
 - structured Git gateway
 
-Status: implemented with read-only status/diff/log/show plus approval-gated add/commit/switch/restore/push mutations.
+Status: implemented with read-only status/diff/log/show/show_file operations, bounded diff pagination, branch creation, and approval-gated add/commit/switch/restore/push mutations.
 
 ## Stage 7
 
@@ -64,4 +64,3 @@ Status: approval-bound execution is implemented and structured workspace patches
 Status: release bundles now include the pinned official OpenAI tunnel-client runtime, and the tunnel acceptance/benchmark harnesses exist. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
 
 UI and LSP remain optional and should only be added if real usage metrics justify them.
-
