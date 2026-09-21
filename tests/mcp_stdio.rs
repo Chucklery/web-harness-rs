@@ -285,7 +285,12 @@ fn stdio_mcp_rejects_search_query_and_queries_together() {
     .unwrap();
     stdin.flush().unwrap();
     let response: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-    assert_eq!(response["error"]["code"], -32602);
+    assert!(response.get("error").is_none());
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(
+        response["result"]["structuredContent"]["error"]["code"],
+        -32602
+    );
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

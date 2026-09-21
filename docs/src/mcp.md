@@ -109,6 +109,10 @@ Mutation calls may provide `expected_head`; after approval and immediately befor
 
 `diff` accepts optional `offset` and `limit` arguments to return bounded file/hunk chunks with a parser-ready `next_offset`; keep the other diff arguments unchanged when continuing. `show_file` reads one workspace-scoped path from a validated revision. Commit accepts an optional pathspec list so existing staged changes outside that list are not included. Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
 
+## Errors
+
+Recoverable tool failures, including invalid arguments, workspace conflicts, permission denials, dependency failures, and command failures, return a normal `tools/call` result with `isError: true` and machine-readable `structuredContent.error`. JSON-RPC errors remain reserved for malformed protocol requests, unknown methods, and requests that cannot be dispatched to a tool.
+
 ## Approval
 
 One-time approvals are host-only. When the initialized MCP client advertises elicitation support, web-harness sends `elicitation/create` with a bounded confirmation form and only executes after the client returns an accepted response. The approval ticket is never exposed as a callable MCP tool, so the model cannot approve its own request or route approval through `call_runtime_tool`.

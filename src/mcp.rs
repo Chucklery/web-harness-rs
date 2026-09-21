@@ -514,6 +514,15 @@ fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
     payload
 }
 
+fn runtime_tool_error(tool: &str, error: RuntimeToolError) -> Value {
+    let payload = runtime_error(tool, error);
+    json!({
+        "content": [{"type": "text", "text": payload.to_string()}],
+        "structuredContent": {"error": payload},
+        "isError": true
+    })
+}
+
 fn call_tool(
     params: &Value,
     workspace: &Workspace,
@@ -534,9 +543,10 @@ fn call_tool(
         )
     };
     if let Some(result) = runtime_result {
-        return result
-            .map(runtime_content)
-            .map_err(|error| runtime_error(name, error));
+        return Ok(match result {
+            Ok(value) => runtime_content(value),
+            Err(error) => runtime_tool_error(name, error),
+        });
     }
     match name {
         "runtime_status" => {
