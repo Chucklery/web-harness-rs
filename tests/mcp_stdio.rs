@@ -373,3 +373,86 @@ fn git_mutation_requires_and_consumes_approval() {
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "a.txt");
 }
+
+#[test]
+fn host_decline_does_not_run_git_mutation() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{"capabilities":{"elicitation":{"form":{}}}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let _: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{"name":"git","arguments":{"action":"add","pathspec":["a.txt"]}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let elicitation: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(elicitation["method"], "elicitation/create");
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":elicitation["id"],
+            "result":{"action":"decline"}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let result: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let text = result["result"]["content"][0]["text"].as_str().unwrap();
+    let denied: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(denied["status"], "denied");
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let staged = Command::new("git")
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&staged.stdout).trim().is_empty());
+}
