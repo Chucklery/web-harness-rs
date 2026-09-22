@@ -45,14 +45,27 @@ impl RuntimeTool for PatchRuntime {
         let changed_paths =
             patch::apply_with_revisions(context.workspace(), patch_text, &expected_revisions)
                 .map_err(|error| {
-                    let kind = if matches!(error, patch::PatchError::Conflict(_)) {
-                        RuntimeErrorKind::Conflict
-                    } else {
-                        RuntimeErrorKind::Execution
-                    };
+                    let kind = patch_error_kind(&error);
                     RuntimeToolError::new(kind, error.to_string())
                 })?;
         Ok(json!({"changed_paths": changed_paths}))
+    }
+}
+
+fn patch_error_kind(error: &patch::PatchError) -> RuntimeErrorKind {
+    match error {
+        patch::PatchError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
+        patch::PatchError::Conflict(_) => RuntimeErrorKind::Conflict,
+        patch::PatchError::Workspace(crate::workspace::WorkspaceError::Denied(_)) => {
+            RuntimeErrorKind::Denied
+        }
+        patch::PatchError::Workspace(crate::workspace::WorkspaceError::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            RuntimeErrorKind::NotFound
+        }
+        patch::PatchError::Workspace(_) => RuntimeErrorKind::Workspace,
+        patch::PatchError::Io(_) => RuntimeErrorKind::Execution,
     }
 }
 
@@ -104,5 +117,38 @@ mod tests {
         let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
         let error = PatchRuntime.call(&mut context, &json!({})).unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn maps_invalid_patch_syntax_to_invalid_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let error = PatchRuntime
+            .call(
+                &mut context,
+                &json!({"patch": "*** Begin Patch\nnot an operation\n*** End Patch"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn maps_denied_patch_paths_to_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("blocked")).unwrap();
+        let workspace = Workspace::with_denied(dir.path(), &["blocked".to_string()]).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let error = PatchRuntime
+            .call(
+                &mut context,
+                &json!({"patch": "*** Begin Patch\n*** Add File: blocked/new.txt\n+data\n*** End Patch"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Denied);
     }
 }
