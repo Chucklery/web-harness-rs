@@ -30,6 +30,19 @@ pub const PROTECTED_DIRECTORY_GLOBS: &[&str] = &[
     "!**/passwords/**",
 ];
 
+pub fn is_safe_example(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .is_some_and(|name| {
+            matches!(
+                name.as_str(),
+                ".env.example" | ".env.sample" | ".env.template"
+            )
+        })
+}
+
 pub fn is_protected(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
     if path.components().any(|component| {
@@ -60,10 +73,7 @@ pub fn is_protected(path: impl AsRef<Path>) -> bool {
         return false;
     };
     let name = name.to_ascii_lowercase();
-    if matches!(
-        name.as_str(),
-        ".env.example" | ".env.sample" | ".env.template"
-    ) {
+    if is_safe_example(path) {
         return false;
     }
     if name == ".env"

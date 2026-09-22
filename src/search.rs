@@ -131,8 +131,10 @@ pub fn search(
         for exclude in path_policy::PROTECTED_GLOBS {
             command.args(["--glob", exclude]);
         }
-        for include in path_policy::SAFE_EXAMPLE_GLOBS {
-            command.args(["--glob", include]);
+        if path_policy::is_safe_example(&options.scope) {
+            for include in path_policy::SAFE_EXAMPLE_GLOBS {
+                command.args(["--glob", include]);
+            }
         }
         for exclude in path_policy::PROTECTED_DIRECTORY_GLOBS {
             command.args(["--glob", exclude]);
