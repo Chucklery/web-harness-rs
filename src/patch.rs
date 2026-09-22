@@ -1,6 +1,6 @@
 use crate::atomic_file;
 use crate::workspace::{Workspace, WorkspaceError};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use thiserror::Error;
 
@@ -42,7 +42,17 @@ pub fn apply_with_revisions(
     let operations = parse(input)?;
     let mut prepared = Vec::new();
     let mut created_dirs = Vec::new();
+    let mut seen_paths = HashSet::new();
     for operation in operations {
+        let operation_path = match &operation {
+            Operation::Add { path, .. }
+            | Operation::Update { path, .. }
+            | Operation::Delete { path } => path,
+        };
+        if !seen_paths.insert(operation_path.clone()) {
+            cleanup_dirs(&created_dirs);
+            return Err(PatchError::Conflict(operation_path.clone()));
+        }
         match operation {
             Operation::Add { path, content } => {
                 let new_dirs = match workspace.ensure_parent_dirs(&path) {
@@ -280,6 +290,18 @@ mod tests {
             "created\n"
         );
         assert!(!dir.path().join("delete.txt").exists());
+    }
+
+    #[test]
+    fn rejects_duplicate_paths_before_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let patch = "*** Begin Patch\n*** Add File: nested/a.txt\n+first\n*** Add File: nested/a.txt\n+second\n*** End Patch";
+        assert!(matches!(
+            apply(&ws, patch),
+            Err(PatchError::Conflict(path)) if path == "nested/a.txt"
+        ));
+        assert!(!dir.path().join("nested").exists());
     }
 
     #[test]
