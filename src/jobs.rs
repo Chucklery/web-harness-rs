@@ -1,11 +1,10 @@
-use crate::job_process::{read_tail, spawn_job, terminate, SpawnedProcess};
+use crate::job_process::{spawn_job, terminate, OutputArtifacts, SpawnedProcess, OUTPUT_LIMIT};
 use crate::redact;
 use crate::sandbox::NetworkPolicy;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +13,7 @@ use thiserror::Error;
 
 const MAX_BACKGROUND_JOBS: usize = 2;
 const MAX_RETAINED_COMPLETED_JOBS: usize = 4;
-const OUTPUT_TAIL_BYTES: usize = 256 * 1024;
+const OUTPUT_TAIL_BYTES: usize = OUTPUT_LIMIT;
 const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_WAIT: Duration = Duration::from_secs(60);
 
@@ -60,8 +59,7 @@ pub struct JobOutputChunk {
 
 struct Job {
     child: Child,
-    stdout_path: PathBuf,
-    stderr_path: PathBuf,
+    artifacts: OutputArtifacts,
     stdin_path: Option<PathBuf>,
     state: JobState,
 }
@@ -128,9 +126,12 @@ impl Job {
         }
     }
 
-    fn remove_artifacts(&self) {
-        let _ = fs::remove_file(&self.stdout_path);
-        let _ = fs::remove_file(&self.stderr_path);
+    fn finish_output(&mut self) -> Result<(), std::io::Error> {
+        self.artifacts.finish()
+    }
+
+    fn remove_artifacts(&mut self) {
+        let _ = self.finish_output();
         if let Some(path) = &self.stdin_path {
             let _ = fs::remove_file(path);
         }
@@ -184,7 +185,7 @@ impl JobManager {
         let spawned = spawn_job(workspace, argv, cwd, sandboxed, network, stdin)?;
         let SpawnedProcess {
             mut child,
-            artifacts,
+            mut artifacts,
             stdin_path,
         } = spawned;
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(120_000)).min(MAX_TIMEOUT);
@@ -201,20 +202,16 @@ impl JobManager {
             std::thread::sleep(Duration::from_millis(20));
         };
 
-        let output = (
-            read_tail(&artifacts.stdout.path, OUTPUT_TAIL_BYTES),
-            read_tail(&artifacts.stderr.path, OUTPUT_TAIL_BYTES),
-        );
-        artifacts.remove();
+        artifacts.finish()?;
         if let Some(path) = stdin_path {
             let _ = fs::remove_file(path);
         }
-        let ((stdout_tail, stdout_truncated), (stderr_tail, stderr_truncated)) =
-            (output.0?, output.1?);
+        let (stdout, stdout_truncated) = artifacts.stdout.snapshot_tail()?;
+        let (stderr, stderr_truncated) = artifacts.stderr.snapshot_tail()?;
         Ok(ExecResult {
             exit_code,
-            stdout_tail: redact::text(&stdout_tail),
-            stderr_tail: redact::text(&stderr_tail),
+            stdout_tail: redact::text(&String::from_utf8_lossy(&stdout)),
+            stderr_tail: redact::text(&String::from_utf8_lossy(&stderr)),
             stdout_truncated,
             stderr_truncated,
             timed_out,
@@ -255,8 +252,7 @@ impl JobManager {
             id.clone(),
             Job {
                 child: spawned.child,
-                stdout_path: spawned.artifacts.stdout.path,
-                stderr_path: spawned.artifacts.stderr.path,
+                artifacts: spawned.artifacts,
                 stdin_path: spawned.stdin_path,
                 state: JobState::Running,
             },
@@ -281,13 +277,13 @@ impl JobManager {
             .jobs
             .get(id)
             .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-        let path = match stream {
-            "stdout" => &job.stdout_path,
-            "stderr" => &job.stderr_path,
+        let capture = match stream {
+            "stdout" => &job.artifacts.stdout,
+            "stderr" => &job.artifacts.stderr,
             _ => return Err(JobError::Invalid("stream must be stdout or stderr".into())),
         };
-        let (text, truncated) = read_tail(path, OUTPUT_TAIL_BYTES)?;
-        Ok((redact::text(&text), truncated))
+        let (bytes, truncated) = capture.snapshot_tail()?;
+        Ok((redact::text(&String::from_utf8_lossy(&bytes)), truncated))
     }
 
     pub fn output_from(
@@ -300,23 +296,16 @@ impl JobManager {
             .jobs
             .get(id)
             .ok_or_else(|| JobError::NotFound(id.to_string()))?;
-        let path = match stream {
-            "stdout" => &job.stdout_path,
-            "stderr" => &job.stderr_path,
+        let capture = match stream {
+            "stdout" => &job.artifacts.stdout,
+            "stderr" => &job.artifacts.stderr,
             _ => return Err(JobError::Invalid("stream must be stdout or stderr".into())),
         };
-        let mut file = fs::File::open(path)?;
-        let length = file.metadata()?.len();
-        let cursor = cursor.min(length);
-        file.seek(SeekFrom::Start(cursor))?;
-        let remaining = (length - cursor) as usize;
-        let limit = OUTPUT_TAIL_BYTES.min(remaining);
-        let mut bytes = vec![0; limit];
-        file.read_exact(&mut bytes)?;
+        let (bytes, next_cursor, truncated) = capture.snapshot_from(cursor, OUTPUT_TAIL_BYTES)?;
         Ok(JobOutputChunk {
             text: redact::text(&String::from_utf8_lossy(&bytes)),
-            next_cursor: cursor + limit as u64,
-            truncated: remaining > limit,
+            next_cursor,
+            truncated,
         })
     }
 
@@ -363,6 +352,10 @@ impl JobManager {
             job.transition(transition)?
         };
         if completed {
+            self.jobs
+                .get_mut(id)
+                .expect("transitioned job is retained")
+                .finish_output()?;
             self.record_completed(id);
         }
         Ok(self
@@ -380,7 +373,7 @@ impl JobManager {
             let Some(evicted_id) = self.completed_order.pop_front() else {
                 break;
             };
-            if let Some(job) = self.jobs.remove(&evicted_id) {
+            if let Some(mut job) = self.jobs.remove(&evicted_id) {
                 job.remove_artifacts();
             }
         }
@@ -520,6 +513,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn background_output_is_bounded_and_reports_cursor_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["seq".into(), "100000".into()], None, false)
+            .unwrap();
+        assert_eq!(
+            manager.wait(&started.id, Some(5_000)).unwrap().state,
+            "exited"
+        );
+        let job = manager.jobs.get(&started.id).unwrap();
+        assert!(job.artifacts.stdout.retained_bytes() <= OUTPUT_LIMIT);
+        let chunk = manager.output_from(&started.id, "stdout", 0).unwrap();
+        assert!(chunk.truncated);
+        assert!(chunk.next_cursor > 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn running_job_is_not_recorded_as_completed() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
@@ -583,17 +596,11 @@ mod tests {
         let ws = Workspace::new(dir.path()).unwrap();
         let mut manager = JobManager::new();
         let mut ids = Vec::new();
-        let mut first_artifacts = None;
-
-        for index in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
+        for _ in 0..(MAX_RETAINED_COMPLETED_JOBS + 2) {
             let started = manager
                 .start(&ws, &["printf".into(), "done".into()], None, false)
                 .unwrap();
             let id = started.id.clone();
-            if index == 0 {
-                let job = manager.jobs.get(&id).unwrap();
-                first_artifacts = Some((job.stdout_path.clone(), job.stderr_path.clone()));
-            }
             loop {
                 let status = manager.poll(&id).unwrap();
                 if status.state == "exited" {
@@ -607,9 +614,14 @@ mod tests {
         assert!(manager.jobs.len() <= MAX_RETAINED_COMPLETED_JOBS);
         assert!(!manager.jobs.contains_key(&ids[0]));
         assert!(!manager.jobs.contains_key(&ids[1]));
-        let (stdout_path, stderr_path) = first_artifacts.unwrap();
-        assert!(!stdout_path.exists());
-        assert!(!stderr_path.exists());
+        assert!(manager
+            .jobs
+            .values()
+            .all(|job| job.artifacts.stdout.retained_bytes() <= OUTPUT_LIMIT));
+        assert!(manager
+            .jobs
+            .values()
+            .all(|job| job.artifacts.stderr.retained_bytes() <= OUTPUT_LIMIT));
     }
 
     #[cfg(unix)]

@@ -43,7 +43,7 @@ Exec 默认使用 argv 形式；需要 pipes、重定向或短命令链时，也
 
 ## job
 
-Job 支持 poll、有限等待、list、cancel 以及 stdout/stderr 读取。output 可携带字节 cursor 做增量读取，并返回下一次 cursor；输出始终写入有界临时文件，Host 退出时终止所属进程组。
+Job 支持 poll、有限等待、list、cancel 以及 stdout/stderr 读取。output 可携带字节 cursor 做增量读取，并返回下一次 cursor；Host 会持续排空子进程管道，但每个流只保留有界的内存环形缓冲，过旧 cursor 会明确返回 truncated，不会因噪声输出增长无界状态。
 
 Exec 可选接受一次性 UTF-8 `stdin`，上限 64 KiB。输入通过 Host 管理的临时文件提供给子进程，随后关闭；不提供 PTY 或交互式常驻会话，输入内容也会绑定到审批票据。
 
