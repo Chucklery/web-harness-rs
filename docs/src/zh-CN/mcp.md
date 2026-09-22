@@ -33,7 +33,7 @@ Search 还支持工作区相对 `scope`、literal 模式、有界 include/exclud
 
 ## 命令执行
 
-Exec 使用 argv 形式，不提供 shell 字符串模式。命令在启动前会做策略校验：对已知的 shell 与解释器（`sh`、`bash`、`python`、`ruby` 等）拒绝内联求值标志（`sh -c`、`bash -c`、`python -c`、`ruby -c`），并提示改用工作区内的脚本文件。这是策略过滤而非安全边界——`PATH` 中仍可能存在 `env` 这类包装器——真正的边界始终是下面的 sandbox。
+Exec 默认使用 argv 形式；需要 pipes、重定向或短命令链时，也可使用有界的一次性 `script`。argv 命令在启动前会做策略校验：对已知的 shell 与解释器（`sh`、`bash`、`python`、`ruby` 等）拒绝内联求值标志（`sh -c`、`bash -c`、`python -c`、`ruby -c`），并提示改用显式 script 或工作区内的脚本文件。script 不与 `stdin` 同时接受，且始终需要一次性审批。这是策略过滤而非安全边界——`PATH` 中仍可能存在 `env` 这类包装器——真正的边界始终是下面的 sandbox。
 
 通过 exec 直接运行的 Git 命令会在启动前分类，并复用结构化 Git 的审批 capability：`git push` 需要 `git.remote.write`，其他直接 Git 调用保守地要求 `git.local.write`。已批准的普通程序或包装器仍可能修改 sandbox 内的工作区，因此通用进程审批本身授予工作区范围内的执行权限。
 
@@ -61,7 +61,7 @@ Patch 支持有界的 Add、Update 和 Delete。路径始终受工作区边界�
 
 ## 错误
 
-可恢复的工具失败（包括参数错误、工作区冲突、权限拒绝、依赖缺失和命令执行失败）会以正常 `tools/call` result 返回，并设置 `isError: true`，同时在 `structuredContent.error` 提供机器可读错误。JSON-RPC 顶层 error 仅用于协议格式错误、未知 method，以及无法分派到工具的请求。
+可恢复的工具失败（包括参数错误、文件不存在、范围越界、编码错误、工作区冲突、权限拒绝、依赖缺失和命令执行失败）会以正常 `tools/call` result 返回，并设置 `isError: true`，同时在 `structuredContent.error` 提供机器可读错误。JSON-RPC 顶层 error 仅用于协议格式错误、未知 method，以及无法分派到工具的请求。
 
 被沙箱化的子进程会收到 `WEB_HARNESS_SANDBOX` 标记。若 web-harness 自身已经运行在 web-harness sandbox 内，该标记会阻止再次套用 Seatbelt——macOS 会以 `sandbox_apply: Operation not permitted` 拒绝嵌套 `sandbox-exec`，这正是此前通过 `exec` 运行 `cargo test` 失败的原因。该标记只抑制重复包装，外层 sandbox 依然生效。
 

@@ -6,6 +6,9 @@ use thiserror::Error;
 pub enum RuntimeErrorKind {
     InvalidArguments,
     Workspace,
+    NotFound,
+    InvalidEncoding,
+    Range,
     LimitExceeded,
     Execution,
     Permission,

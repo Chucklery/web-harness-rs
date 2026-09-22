@@ -180,7 +180,7 @@ fn read_range(
     let workspace = context.workspace();
     let revision = workspace
         .read_revision(&request.path)
-        .map_err(workspace_error)?;
+        .map_err(file_workspace_error)?;
     if request
         .expected_revision
         .as_deref()
@@ -192,11 +192,13 @@ fn read_range(
         ));
     }
 
-    let path = workspace.resolve(&request.path).map_err(workspace_error)?;
+    let path = workspace
+        .resolve(&request.path)
+        .map_err(file_workspace_error)?;
     if !path.is_file() {
         return Err(invalid("path is not a regular file"));
     }
-    let file = File::open(path).map_err(|error| workspace_error(error.into()))?;
+    let file = File::open(path).map_err(|error| file_io_error(error, "opening file"))?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
     let mut line_number = 0usize;
@@ -207,7 +209,7 @@ fn read_range(
         line.clear();
         let bytes = reader
             .read_line(&mut line)
-            .map_err(|error| workspace_error(error.into()))?;
+            .map_err(|error| file_io_error(error, "reading UTF-8 file"))?;
         if bytes == 0 {
             break;
         }
@@ -231,6 +233,12 @@ fn read_range(
         text.push_str(&line);
         end_line = line_number;
     }
+    if request.start_line > 1 && line_number < request.start_line {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::Range,
+            "start_line is beyond the end of the file",
+        ));
+    }
     Ok(ReadResult {
         text,
         end_line,
@@ -244,8 +252,27 @@ fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolErr
     RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
 }
 
-fn workspace_error(error: crate::workspace::WorkspaceError) -> RuntimeToolError {
-    RuntimeToolError::new(RuntimeErrorKind::Workspace, error.to_string())
+fn file_workspace_error(error: crate::workspace::WorkspaceError) -> RuntimeToolError {
+    let kind = match error {
+        crate::workspace::WorkspaceError::Io(ref error)
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            RuntimeErrorKind::NotFound
+        }
+        _ => RuntimeErrorKind::Workspace,
+    };
+    RuntimeToolError::new(kind, error.to_string())
+}
+
+fn file_io_error(error: std::io::Error, operation: &str) -> RuntimeToolError {
+    let kind = if error.kind() == std::io::ErrorKind::InvalidData {
+        RuntimeErrorKind::InvalidEncoding
+    } else if error.kind() == std::io::ErrorKind::NotFound {
+        RuntimeErrorKind::NotFound
+    } else {
+        RuntimeErrorKind::Workspace
+    };
+    RuntimeToolError::new(kind, format!("{operation}: {error}"))
 }
 
 fn invalid(message: impl Into<String>) -> RuntimeToolError {
@@ -320,6 +347,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value["files"][0]["text"], "alpha");
+    }
+
+    #[test]
+    fn rejects_non_utf8_files_with_a_distinct_error() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("binary.dat"), [0xff, 0xfe]).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let error = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths": ["binary.dat"]}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidEncoding);
+    }
+
+    #[test]
+    fn rejects_start_line_beyond_file_end() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let error = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths": [{"path": "a.txt", "start_line": 4}]}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Range);
     }
 
     #[test]

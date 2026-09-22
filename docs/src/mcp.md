@@ -113,7 +113,7 @@ Mutation calls may provide `expected_head`; after approval and immediately befor
 
 ## Errors
 
-Recoverable tool failures, including invalid arguments, workspace conflicts, permission denials, dependency failures, and command failures, return a normal `tools/call` result with `isError: true` and machine-readable `structuredContent.error`. JSON-RPC errors remain reserved for malformed protocol requests, unknown methods, and requests that cannot be dispatched to a tool.
+Recoverable tool failures, including invalid arguments, missing files, out-of-range reads, encoding failures, workspace conflicts, permission denials, dependency failures, and command failures, return a normal `tools/call` result with `isError: true` and machine-readable `structuredContent.error`. JSON-RPC errors remain reserved for malformed protocol requests, unknown methods, and requests that cannot be dispatched to a tool.
 
 ## Approval
 
