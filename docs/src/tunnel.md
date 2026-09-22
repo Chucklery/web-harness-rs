@@ -23,7 +23,7 @@ setup directs users to:
 
 ## Local command
 
-The local server command that a tunnel profile should eventually launch is equivalent to:
+The local server command that a tunnel profile launches is equivalent to:
 
 ~~~bash
 web-harness serve --stdio --workspace /absolute/path/to/project
