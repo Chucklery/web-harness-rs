@@ -131,6 +131,12 @@ pub fn search(
         for exclude in path_policy::PROTECTED_GLOBS {
             command.args(["--glob", exclude]);
         }
+        for include in path_policy::SAFE_EXAMPLE_GLOBS {
+            command.args(["--glob", include]);
+        }
+        for exclude in path_policy::PROTECTED_DIRECTORY_GLOBS {
+            command.args(["--glob", exclude]);
+        }
     }
     command
         .arg("--")
@@ -338,6 +344,23 @@ mod tests {
     #[test]
     fn default_options_preserve_match_mode() {
         assert_eq!(SearchOptions::default().mode, SearchMode::Matches);
+    }
+
+    #[test]
+    fn safe_env_example_scope_is_not_filtered_as_protected() {
+        if !ripgrep_available() {
+            eprintln!("skipping: ripgrep is not installed");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        fs::write(dir.path().join(".env.example"), "EXAMPLE=true\n").unwrap();
+        let options = SearchOptions {
+            scope: ".env.example".into(),
+            ..SearchOptions::default()
+        };
+        let result = search(&workspace, "EXAMPLE", 10, &options).unwrap();
+        assert_eq!(result.matches.len(), 1);
     }
 
     #[test]

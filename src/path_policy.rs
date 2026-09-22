@@ -18,6 +18,18 @@ pub const PROTECTED_GLOBS: &[&str] = &[
     "!**/.ssh/**",
 ];
 
+pub const SAFE_EXAMPLE_GLOBS: &[&str] = &["**/.env.example", "**/.env.sample", "**/.env.template"];
+
+pub const PROTECTED_DIRECTORY_GLOBS: &[&str] = &[
+    "!**/.ssh/**",
+    "!**/secret/**",
+    "!**/secrets/**",
+    "!**/credentials/**",
+    "!**/private/**",
+    "!**/password/**",
+    "!**/passwords/**",
+];
+
 pub fn is_protected(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
     if path.components().any(|component| {
