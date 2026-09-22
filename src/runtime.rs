@@ -203,9 +203,10 @@ pub fn connect(
         }
     }
     process::detach_into_own_group(&mut command)?;
-    let child = command.spawn()?;
+    let mut child = command.spawn()?;
     std::thread::sleep(TUNNEL_STARTUP_GRACE);
     if !process::process_alive(child.id()) {
+        cleanup_failed_tunnel(&mut child);
         return Err(RuntimeError::Io(std::io::Error::other(
             "tunnel process exited during startup; use tunnel doctor/accept for diagnostics",
         )));
@@ -221,13 +222,21 @@ pub fn connect(
             .as_secs(),
         denied_paths: workspace.denied(),
     };
-    write_state(&state)?;
+    if let Err(error) = write_state(&state) {
+        cleanup_failed_tunnel(&mut child);
+        return Err(error);
+    }
     Ok(connected_status(
         Some(user_config),
         state,
         workspace.denied(),
         "connected",
     ))
+}
+
+fn cleanup_failed_tunnel(child: &mut std::process::Child) {
+    let _ = process::terminate_process_group(child.id());
+    let _ = child.wait();
 }
 
 pub fn status() -> Result<UserStatus, RuntimeError> {
@@ -503,5 +512,28 @@ mod tests {
         assert!(command.contains("web harness"));
         assert!(command.contains("project with spaces"));
         assert!(command.contains("--deny-paths '.git,target'"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_tunnel_cleanup_terminates_the_owned_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("sleep 30 & exit 0");
+        process::detach_into_own_group(&mut command).unwrap();
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        for _ in 0..100 {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        cleanup_failed_tunnel(&mut child);
+        assert_eq!(
+            unsafe { libc::kill(-(pid as i32), 0) },
+            -1,
+            "failed startup must not leave the tunnel process group alive"
+        );
     }
 }
