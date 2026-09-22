@@ -10,6 +10,8 @@ pub enum PatchError {
     Invalid(String),
     #[error("patch conflict in {0}")]
     Conflict(String),
+    #[error("patch target exceeds the bounded update limit: {0}")]
+    Limit(String),
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
     #[error(transparent)]
@@ -28,6 +30,8 @@ struct Hunk {
     old: String,
     new: String,
 }
+
+const MAX_PATCH_TARGET_BYTES: u64 = 8 * 1024 * 1024;
 
 #[cfg(any(test, feature = "release-tools"))]
 pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchError> {
@@ -94,6 +98,10 @@ pub fn apply_with_revisions(
                         cleanup_dirs(&created_dirs);
                         return Err(PatchError::Conflict(path));
                     }
+                }
+                if fs::metadata(&target)?.len() > MAX_PATCH_TARGET_BYTES {
+                    cleanup_dirs(&created_dirs);
+                    return Err(PatchError::Limit(path));
                 }
                 let mut content = match fs::read_to_string(&target) {
                     Ok(content) => content,

@@ -56,6 +56,7 @@ fn patch_error_kind(error: &patch::PatchError) -> RuntimeErrorKind {
     match error {
         patch::PatchError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
         patch::PatchError::Conflict(_) => RuntimeErrorKind::Conflict,
+        patch::PatchError::Limit(_) => RuntimeErrorKind::LimitExceeded,
         patch::PatchError::Workspace(crate::workspace::WorkspaceError::Denied(_)) => {
             RuntimeErrorKind::Denied
         }
@@ -150,5 +151,26 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Denied);
+    }
+
+    #[test]
+    fn rejects_oversized_patch_targets_before_reading_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("large.txt"),
+            vec![b'x'; 8 * 1024 * 1024 + 1],
+        )
+        .unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let error = PatchRuntime
+            .call(
+                &mut context,
+                &json!({"patch": "*** Begin Patch\n*** Update File: large.txt\n@@\n-x\n+y\n*** End Patch"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::LimitExceeded);
     }
 }

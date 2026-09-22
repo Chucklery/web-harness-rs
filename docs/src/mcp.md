@@ -25,7 +25,7 @@ Returns the canonical configured workspace root.
 
 Reads up to 16 UTF-8 files per call.
 
-Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Common protected paths (`.env`, private keys, credentials, and similar files) return an approval ticket; retry with its `approval_id` after host confirmation.
+Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded metadata-plus-content-sample `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Common protected paths (`.env`, private keys, credentials, and similar files) return an approval ticket; retry with its `approval_id` after host confirmation.
 
 Current limits:
 

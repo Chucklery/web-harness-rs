@@ -1,6 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -25,6 +26,7 @@ pub enum WorkspaceError {
 /// default so that connecting in a project directory does not implicitly
 /// expose the whole checkout, including uncommitted history.
 pub const DEFAULT_DENY_PATHS: &[&str] = &[".git", "target", "node_modules"];
+const REVISION_SAMPLE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -194,10 +196,29 @@ impl Workspace {
     pub fn read_revision(&self, relative: impl AsRef<Path>) -> Result<String, WorkspaceError> {
         let path = self.resolve(relative)?;
         let mut file = fs::File::open(path)?;
-        let length = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        let length = metadata.len();
         let mut digest = Sha256::new();
         digest.update(length.to_le_bytes());
-        std::io::copy(&mut file, &mut digest)?;
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                digest.update(since_epoch.as_secs().to_le_bytes());
+                digest.update(since_epoch.subsec_nanos().to_le_bytes());
+            }
+        }
+        let sample = REVISION_SAMPLE_BYTES.min(length);
+        let mut bytes = vec![0; sample as usize];
+        file.read_exact(&mut bytes)?;
+        digest.update([0]);
+        digest.update(&bytes);
+        if length > sample {
+            let tail_start = length.saturating_sub(REVISION_SAMPLE_BYTES);
+            file.seek(SeekFrom::Start(tail_start))?;
+            let mut tail = vec![0; (length - tail_start) as usize];
+            file.read_exact(&mut tail)?;
+            digest.update([1]);
+            digest.update(&tail);
+        }
         Ok(format!("sha256:{:x}", digest.finalize()))
     }
 
