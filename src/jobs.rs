@@ -100,6 +100,12 @@ impl Job {
         let Some(status) = status else {
             return Ok(false);
         };
+        // A shell can exit while a descendant still holds the inherited
+        // stdout/stderr pipe. Terminate the owned process group before joining
+        // output readers so completion cannot wait on an orphaned descendant.
+        if matches!(transition, JobTransition::Observe) {
+            terminate(&mut self.child)?;
+        }
         let exit_code = status.code().unwrap_or(-1);
         self.state = if cancelled {
             JobState::Cancelled(exit_code)
@@ -202,6 +208,7 @@ impl JobManager {
             std::thread::sleep(Duration::from_millis(20));
         };
 
+        terminate(&mut child)?;
         artifacts.finish()?;
         if let Some(path) = stdin_path {
             let _ = fs::remove_file(path);
@@ -529,6 +536,28 @@ mod tests {
         let chunk = manager.output_from(&started.id, "stdout", 0).unwrap();
         assert!(chunk.truncated);
         assert!(chunk.next_cursor > 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completion_cleans_descendants_that_hold_output_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        fs::write(
+            dir.path().join("descendant.sh"),
+            "#!/bin/sh\nsleep 10 &\nexit 0\n",
+        )
+        .unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["sh".into(), "descendant.sh".into()], None, false)
+            .unwrap();
+        let began = Instant::now();
+        assert_eq!(
+            manager.wait(&started.id, Some(2_000)).unwrap().state,
+            "exited"
+        );
+        assert!(began.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]
