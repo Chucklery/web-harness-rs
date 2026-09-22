@@ -1,7 +1,7 @@
 use crate::command_output;
 use crate::env;
 use crate::redact;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
 use std::process::{Command, Stdio};
 use thiserror::Error;
@@ -12,6 +12,8 @@ const MAX_OUTPUT: usize = 512 * 1024;
 pub enum GitError {
     #[error("git is not available")]
     Unavailable,
+    #[error(transparent)]
+    Workspace(#[from] WorkspaceError),
     #[error("git command failed: {0}")]
     Failed(String),
     #[error("invalid git request: {0}")]
@@ -106,7 +108,7 @@ pub fn show_file(workspace: &Workspace, revision: &str, path: &str) -> Result<Gi
     validate_ref_name(revision)?;
     workspace
         .resolve_for_write(path)
-        .map_err(|error| GitError::Invalid(error.to_string()))?;
+        .map_err(GitError::Workspace)?;
     run_owned(workspace, &["show".into(), format!("{revision}:{path}")])
 }
 
@@ -273,7 +275,7 @@ fn validate_pathspec(
     for path in pathspec {
         workspace
             .resolve_for_write(path)
-            .map_err(|error| GitError::Invalid(error.to_string()))?;
+            .map_err(GitError::Workspace)?;
     }
     Ok(())
 }

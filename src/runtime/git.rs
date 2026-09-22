@@ -274,6 +274,15 @@ fn validate_expected_head(value: &str) -> Result<String, RuntimeToolError> {
 fn git_error(error: GitError) -> RuntimeToolError {
     let kind = match &error {
         GitError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
+        GitError::Workspace(crate::workspace::WorkspaceError::Denied(_)) => {
+            RuntimeErrorKind::Denied
+        }
+        GitError::Workspace(crate::workspace::WorkspaceError::Io(io_error))
+            if io_error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            RuntimeErrorKind::NotFound
+        }
+        GitError::Workspace(_) => RuntimeErrorKind::Workspace,
         GitError::Unavailable => RuntimeErrorKind::Dependency,
         GitError::Failed(_) => RuntimeErrorKind::Execution,
     };
@@ -318,6 +327,19 @@ mod tests {
     fn failed_git_commands_stay_execution_errors() {
         let error = git_error(GitError::Failed("boom".to_string()));
         assert_eq!(error.kind(), RuntimeErrorKind::Execution);
+    }
+
+    #[test]
+    fn workspace_git_errors_keep_boundary_classification() {
+        let denied = git_error(GitError::Workspace(
+            crate::workspace::WorkspaceError::Denied("/workspace/.git".into()),
+        ));
+        assert_eq!(denied.kind(), RuntimeErrorKind::Denied);
+
+        let missing = git_error(GitError::Workspace(crate::workspace::WorkspaceError::Io(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        )));
+        assert_eq!(missing.kind(), RuntimeErrorKind::NotFound);
     }
 
     #[test]
