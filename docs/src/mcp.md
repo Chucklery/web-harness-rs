@@ -15,6 +15,8 @@ These are compatibility controls, not a second execution system. `call_runtime_t
 
 Tool results provide bounded `structuredContent` alongside the text content compatibility projection. Clients should prefer the structured field and treat text as display/fallback data.
 
+The stdio protocol accepts one UTF-8 JSON line at a time and caps each incoming line at 2 MiB. Oversized lines are drained and rejected so a subsequent request can still be processed.
+
 `tools/list` includes MCP `ToolAnnotations` as conservative interaction hints. They describe read-only, destructive, and open-world behavior for Host UX; they are not the security boundary. Capability checks, Host elicitation, workspace guards, and the OS sandbox remain authoritative.
 
 ## workspace_info

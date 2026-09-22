@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
+const MAX_PROTOCOL_LINE_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Debug, Clone, Deserialize)]
 struct Request {
     jsonrpc: String,
@@ -45,12 +47,23 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
         next_server_request_id: 1,
         ..Session::default()
     };
-    let mut line = String::new();
     loop {
-        line.clear();
-        if stdin.read_line(&mut line)? == 0 {
-            break;
-        }
+        let line = match read_bounded_line(&mut stdin) {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(error) => {
+                let response = Response {
+                    jsonrpc: "2.0",
+                    id: None,
+                    result: None,
+                    error: Some(json!({"code": -32700, "message": error.to_string()})),
+                };
+                serde_json::to_writer(&mut stdout, &response)?;
+                writeln!(&mut stdout)?;
+                stdout.flush()?;
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -175,12 +188,12 @@ fn request_host_approval<R: BufRead, W: Write>(
     writeln!(stdout)?;
     stdout.flush()?;
 
-    let mut line = String::new();
     loop {
-        line.clear();
-        if stdin.read_line(&mut line)? == 0 {
-            return Ok(None);
-        }
+        let line = match read_bounded_line(stdin) {
+            Ok(Some(line)) => line,
+            Ok(None) => return Ok(None),
+            Err(_) => continue,
+        };
         let value: Value = match serde_json::from_str(&line) {
             Ok(value) => value,
             Err(_) => continue,
@@ -202,6 +215,48 @@ fn request_host_approval<R: BufRead, W: Write>(
         }
         return Ok(Some(false));
     }
+}
+
+/// Read one UTF-8 protocol line while keeping both the retained bytes and the
+/// recovery path bounded. If a line is too large, consume its remainder before
+/// returning an error so the next request can still be processed.
+fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    let mut oversized = false;
+
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            if bytes.is_empty() && !oversized {
+                return Ok(None);
+            }
+            break;
+        }
+
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let content_len = newline.unwrap_or(buffer.len());
+        if bytes.len().saturating_add(content_len) > MAX_PROTOCOL_LINE_BYTES {
+            oversized = true;
+        } else if !oversized {
+            bytes.extend_from_slice(&buffer[..content_len]);
+        }
+
+        let consumed = newline.map_or(buffer.len(), |index| index + 1);
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+
+    if oversized {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("MCP protocol line exceeds {MAX_PROTOCOL_LINE_BYTES} bytes"),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn denied_response(response: &Response) -> Response {
@@ -659,6 +714,27 @@ fn call_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn protocol_lines_are_bounded_and_recoverable() {
+        let oversized = "x".repeat(MAX_PROTOCOL_LINE_BYTES + 1);
+        let mut input = Cursor::new(format!("{oversized}\n{{\"ok\":true}}\n"));
+        let error = read_bounded_line(&mut input).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            read_bounded_line(&mut input).unwrap().as_deref(),
+            Some("{\"ok\":true}")
+        );
+    }
+
+    #[test]
+    fn protocol_line_without_newline_is_accepted_at_the_limit() {
+        let mut input = Cursor::new("x".repeat(MAX_PROTOCOL_LINE_BYTES));
+        let line = read_bounded_line(&mut input).unwrap().unwrap();
+        assert_eq!(line.len(), MAX_PROTOCOL_LINE_BYTES);
+        assert!(read_bounded_line(&mut input).unwrap().is_none());
+    }
 
     #[test]
     fn dependency_errors_are_machine_readable() {
