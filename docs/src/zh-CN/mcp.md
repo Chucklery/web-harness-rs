@@ -61,7 +61,7 @@ Patch 支持有界的 Add、Update 和 Delete。路径始终受工作区边界�
 
 ## 错误
 
-可恢复的工具失败（包括参数错误、文件不存在、范围越界、编码错误、工作区冲突、权限拒绝、依赖缺失和命令执行失败）会以正常 `tools/call` result 返回，并设置 `isError: true`，同时在 `structuredContent.error` 提供机器可读错误。JSON-RPC 顶层 error 仅用于协议格式错误、未知 method，以及无法分派到工具的请求。
+可恢复的工具失败（包括参数错误、文件不存在、路径被 deny、不是普通文件、范围越界、编码错误、工作区冲突、权限拒绝、依赖缺失和命令执行失败）会以正常 `tools/call` result 返回，并设置 `isError: true`，同时在 `structuredContent.error` 提供机器可读错误。JSON-RPC 顶层 error 仅用于协议格式错误、未知 method，以及无法分派到工具的请求。
 
 被沙箱化的子进程会收到 `WEB_HARNESS_SANDBOX` 标记。若 web-harness 自身已经运行在 web-harness sandbox 内，该标记会阻止再次套用 Seatbelt——macOS 会以 `sandbox_apply: Operation not permitted` 拒绝嵌套 `sandbox-exec`，这正是此前通过 `exec` 运行 `cargo test` 失败的原因。该标记只抑制重复包装，外层 sandbox 依然生效。
 

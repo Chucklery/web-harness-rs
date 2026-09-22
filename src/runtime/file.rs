@@ -178,6 +178,15 @@ fn read_range(
     max_bytes: usize,
 ) -> Result<ReadResult, RuntimeToolError> {
     let workspace = context.workspace();
+    let path = workspace
+        .resolve(&request.path)
+        .map_err(file_workspace_error)?;
+    if !path.is_file() {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::NotRegularFile,
+            "path is not a regular file",
+        ));
+    }
     let revision = workspace
         .read_revision(&request.path)
         .map_err(file_workspace_error)?;
@@ -192,12 +201,6 @@ fn read_range(
         ));
     }
 
-    let path = workspace
-        .resolve(&request.path)
-        .map_err(file_workspace_error)?;
-    if !path.is_file() {
-        return Err(invalid("path is not a regular file"));
-    }
     let file = File::open(path).map_err(|error| file_io_error(error, "opening file"))?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -259,6 +262,7 @@ fn file_workspace_error(error: crate::workspace::WorkspaceError) -> RuntimeToolE
         {
             RuntimeErrorKind::NotFound
         }
+        crate::workspace::WorkspaceError::Denied(_) => RuntimeErrorKind::Denied,
         _ => RuntimeErrorKind::Workspace,
     };
     RuntimeToolError::new(kind, error.to_string())
@@ -379,6 +383,38 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::Range);
+    }
+
+    #[test]
+    fn distinguishes_directories_from_file_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let error = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths": ["nested"]}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::NotRegularFile);
+    }
+
+    #[test]
+    fn distinguishes_denied_paths_from_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("hidden.txt"), "hidden").unwrap();
+        let workspace = Workspace::with_denied(dir.path(), &["hidden.txt".to_string()]).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let error = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths": ["hidden.txt"]}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Denied);
     }
 
     #[test]

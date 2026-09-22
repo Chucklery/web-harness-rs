@@ -7,6 +7,8 @@ pub enum RuntimeErrorKind {
     InvalidArguments,
     Workspace,
     NotFound,
+    Denied,
+    NotRegularFile,
     InvalidEncoding,
     Range,
     LimitExceeded,

@@ -509,6 +509,8 @@ fn runtime_error(tool: &str, error: RuntimeToolError) -> Value {
     let code = match kind {
         RuntimeErrorKind::InvalidArguments => -32602,
         RuntimeErrorKind::NotFound => -32004,
+        RuntimeErrorKind::Denied => -32007,
+        RuntimeErrorKind::NotRegularFile => -32008,
         RuntimeErrorKind::InvalidEncoding => -32005,
         RuntimeErrorKind::Range => -32006,
         RuntimeErrorKind::Workspace => match tool {
