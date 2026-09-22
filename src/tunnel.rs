@@ -344,15 +344,31 @@ fn local_fixture_roundtrip() -> Result<(), TunnelError> {
         "initialize",
         json!({"capabilities":{"elicitation":{"form":{}}}}),
     )?;
-    if initialized["result"]["serverInfo"]["name"] != "web-harness" {
+    if initialized["result"]["serverInfo"]["name"] != "web-harness"
+        || initialized["result"]["protocolVersion"] != "2025-06-18"
+    {
         return Err(TunnelError::Local(
             "invalid fixture initialize response".into(),
         ));
     }
     let tools = client.request("tools/list", json!({}))?;
-    if !tools["result"]["tools"].is_array() {
+    if !tools["result"]["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.len() >= 9)
+    {
         return Err(TunnelError::Local(
             "invalid fixture tools/list response".into(),
+        ));
+    }
+    let recovered = client.request(
+        "tools/call",
+        json!({"name":"read_files","arguments":{"paths":["missing-fixture.txt"]}}),
+    )?;
+    if recovered["result"]["isError"] != true
+        || recovered["result"]["structuredContent"]["error"]["code"].is_null()
+    {
+        return Err(TunnelError::Local(
+            "fixture error response was not structured or recoverable".into(),
         ));
     }
     client.call_tool("workspace_info", json!({}))?;
