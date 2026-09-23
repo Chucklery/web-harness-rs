@@ -90,7 +90,7 @@ pub(super) fn list() -> Value {
                     "background": {"type": "boolean"},
                     "network": {"type": "string", "enum": ["deny", "outbound"], "default": "deny"},
                     "approval_id": {"type": "string"},
-                    "git_approval_id": {"type": "string"},
+                    "git_approval_id": {"type": "string", "description": "Separate git.local.write or git.remote.write approval for recognizable Git mutations in script mode."},
                     "network_approval_id": {"type": "string"}
                 },
                 "oneOf": [{"required": ["argv"]}, {"required": ["script"]}],

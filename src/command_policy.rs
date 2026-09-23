@@ -84,22 +84,56 @@ pub fn command_risk(argv: &[String]) -> Option<CommandRisk> {
     }
 }
 
-/// Conservatively detects a literal Git push mentioned in a one-shot script.
+/// Conservatively classifies recognizable Git mutation tokens in a one-shot script.
 /// This only selects an extra approval prompt; sandboxing remains the boundary.
-pub fn script_may_push_git_remote(script: &str) -> bool {
+pub fn script_git_risk(script: &str) -> Option<CommandRisk> {
     let mut mentions_git = false;
-    let mut mentions_push = false;
+    let mut mentioned_subcommands = Vec::new();
 
-    for word in script.split(|character: char| !character.is_ascii_alphanumeric()) {
+    for word in
+        script.split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+    {
         if word.is_empty() {
             continue;
         }
         let word = word.to_ascii_lowercase();
         mentions_git |= word == "git";
-        mentions_push |= word == "push";
+        mentioned_subcommands.push(word);
     }
 
-    mentions_git && mentions_push
+    if !mentions_git {
+        return None;
+    }
+    if mentioned_subcommands.iter().any(|word| word == "push") {
+        return Some(CommandRisk::GitRemoteWrite);
+    }
+    const LOCAL_MUTATIONS: &[&str] = &[
+        "add",
+        "am",
+        "branch",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "clone",
+        "commit",
+        "config",
+        "fetch",
+        "init",
+        "merge",
+        "mv",
+        "rebase",
+        "reset",
+        "restore",
+        "rm",
+        "stash",
+        "switch",
+        "tag",
+        "worktree",
+    ];
+    mentioned_subcommands
+        .iter()
+        .any(|word| LOCAL_MUTATIONS.contains(&word.as_str()))
+        .then_some(CommandRisk::GitLocalWrite)
 }
 
 fn git_subcommand(argv: &[String]) -> Option<&str> {
@@ -259,11 +293,20 @@ mod tests {
     }
 
     #[test]
-    fn script_git_push_requires_a_separate_remote_approval() {
-        assert!(script_may_push_git_remote("git push origin main"));
-        assert!(script_may_push_git_remote("/usr/bin/git -C repo push"));
-        assert!(script_may_push_git_remote("& git.exe push origin main"));
-        assert!(!script_may_push_git_remote("git status"));
-        assert!(!script_may_push_git_remote("printf push"));
+    fn script_git_mutations_are_classified_conservatively() {
+        assert_eq!(
+            script_git_risk("git push origin main"),
+            Some(CommandRisk::GitRemoteWrite)
+        );
+        assert_eq!(
+            script_git_risk("/usr/bin/git -C repo push"),
+            Some(CommandRisk::GitRemoteWrite)
+        );
+        assert_eq!(
+            script_git_risk("& git.exe add src/main.rs"),
+            Some(CommandRisk::GitLocalWrite)
+        );
+        assert_eq!(script_git_risk("git status"), None);
+        assert_eq!(script_git_risk("printf push"), None);
     }
 }

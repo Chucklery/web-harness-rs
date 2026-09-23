@@ -131,9 +131,7 @@ impl RuntimeTool for ExecRuntime {
             None if script.is_some() || !sandbox.enforced() => Some(Capability::ProcessExecute),
             None => None,
         };
-        let script_may_push_git_remote = script
-            .as_deref()
-            .is_some_and(command_policy::script_may_push_git_remote);
+        let script_git_risk = script.as_deref().and_then(command_policy::script_git_risk);
         let protected_read = argv.iter().skip(1).any(|argument| {
             path_policy::is_protected(argument) && context.workspace().resolve(argument).is_ok()
         });
@@ -198,9 +196,13 @@ impl RuntimeTool for ExecRuntime {
             }
         }
 
-        if script_may_push_git_remote {
+        if let Some(git_risk) = script_git_risk {
             let mut git_authorization = authorization.clone();
-            git_authorization.capability = Capability::GitRemoteWrite;
+            let capability = match git_risk {
+                CommandRisk::GitLocalWrite => Capability::GitLocalWrite,
+                CommandRisk::GitRemoteWrite => Capability::GitRemoteWrite,
+            };
+            git_authorization.capability = capability;
             if let Some(approval_id) = arguments.get("git_approval_id").and_then(Value::as_str) {
                 context
                     .permissions()
@@ -214,10 +216,19 @@ impl RuntimeTool for ExecRuntime {
                     context,
                     &git_authorization,
                     "git_approval_id",
-                    Capability::GitRemoteWrite,
-                    "Allow this script to push to a Git remote".to_string(),
-                    "A Git push in script mode requires a separate git.remote.write approval"
-                        .to_string(),
+                    capability,
+                    match git_risk {
+                        CommandRisk::GitLocalWrite => {
+                            "Allow this script to mutate the local Git repository".to_string()
+                        }
+                        CommandRisk::GitRemoteWrite => {
+                            "Allow this script to push to a Git remote".to_string()
+                        }
+                    },
+                    match git_risk {
+                        CommandRisk::GitLocalWrite => "A Git mutation in script mode requires a separate git.local.write approval".to_string(),
+                        CommandRisk::GitRemoteWrite => "A Git push in script mode requires a separate git.remote.write approval".to_string(),
+                    },
                 ));
             }
         }
@@ -502,6 +513,54 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("git push policy probe"));
+    }
+
+    #[test]
+    fn script_git_local_mutation_requires_a_separate_local_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let request = json!({"script":"printf 'git add policy probe\\n'"});
+
+        let process_approval = ExecRuntime.call(&mut context, &request).unwrap();
+        assert_eq!(process_approval["capability"], "process.execute");
+        let process_ticket = process_approval["approval"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        context.permissions().approve(&process_ticket).unwrap();
+
+        let mut retry = request.as_object().unwrap().clone();
+        retry.insert("approval_id".into(), json!(process_ticket));
+        let retry = Value::Object(retry);
+        let git_approval = ExecRuntime.call(&mut context, &retry).unwrap();
+        assert_eq!(git_approval["capability"], "git.local.write");
+        assert_eq!(git_approval["approval_argument"], "git_approval_id");
+        let git_ticket = git_approval["approval"]["id"].as_str().unwrap().to_string();
+        context.permissions().approve(&git_ticket).unwrap();
+
+        let mut mismatched_retry = retry.as_object().unwrap().clone();
+        mismatched_retry.insert("git_approval_id".into(), json!(process_ticket));
+        assert_eq!(
+            ExecRuntime
+                .call(&mut context, &Value::Object(mismatched_retry))
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::Permission
+        );
+
+        let mut retry = retry.as_object().unwrap().clone();
+        retry.insert("git_approval_id".into(), json!(git_ticket));
+        let result = ExecRuntime
+            .call(&mut context, &Value::Object(retry))
+            .unwrap();
+        assert_eq!(result["exit_code"], 0);
+        assert!(result["stdout_tail"]
+            .as_str()
+            .unwrap()
+            .contains("git add policy probe"));
     }
 
     #[test]
