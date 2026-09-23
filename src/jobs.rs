@@ -972,4 +972,42 @@ mod tests {
         assert_ne!(result.exit_code, Some(0));
         assert!(listener.accept().is_err());
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_outbound_approval_allows_an_outgoing_connection() {
+        use std::net::TcpListener;
+
+        if !crate::sandbox::can_upgrade_network() || !std::path::Path::new("/usr/bin/nc").exists() {
+            return;
+        }
+        let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
+            eprintln!("skipping: host denied binding a loopback listener");
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(workspace_dir.path()).unwrap();
+        let manager = JobManager::new();
+        let result = manager
+            .run_foreground_with_network(
+                &ws,
+                &[
+                    "/usr/bin/nc".into(),
+                    "-z".into(),
+                    "127.0.0.1".into(),
+                    port.to_string(),
+                ],
+                None,
+                Some(2_000),
+                true,
+                NetworkPolicy::Outbound,
+                None,
+            )
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{}", result.stderr_tail);
+        assert!(listener.accept().is_ok());
+    }
 }

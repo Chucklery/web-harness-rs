@@ -44,7 +44,7 @@ Official release/Homebrew packages redistribute OpenAI's narrow `tunnel-client-r
 
 The exec path applies a lightweight policy before process creation. It rejects executable paths containing parent traversal and direct host-control executables such as shutdown/reboot, disk-management/formatting tools, and privilege-escalation front doors. It intentionally does not ban ordinary developer commands such as git, cargo, or file deletion inside the sandbox because the workspace/sandbox boundary is the primary authority boundary.
 
-The macOS test suite exercises four concrete Seatbelt properties: workspace-outside writes are denied, local network connections are denied, workspace and temporary writes are allowed, and system files/tools remain readable.
+The macOS test suite exercises concrete Seatbelt properties: workspace-outside writes and default local network connections are denied; workspace and temporary writes and system file/tool reads are allowed; an explicitly outbound-enabled child can make an outgoing loopback connection.
 
 ## Current limitations
 

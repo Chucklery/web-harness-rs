@@ -13,4 +13,6 @@
 
 Host elicitation 会显示 capability、简短操作摘要和审批原因，并提醒用户核对原始工具请求。由于 argv/stdin 可能含凭据，不会将其复制到本地审批展示记录。
 
+macOS Seatbelt 测试覆盖默认禁止工作区外写入和本地网络连接、允许 workspace/TMPDIR 写入和系统工具读取，并验证显式开启 outbound 的子进程可建立出站 loopback 连接。
+
 Linux Landlock 目前仅完成上游文档可行性审查，尚未实现，也未在 Linux 主机测试。其文件系统与网络权限依 ABI 版本而异，且无法限制 `chmod` 等部分元数据操作，因此不能声称与 Seatbelt 等价。非 macOS 执行仍依赖逐次显式审批。参见[上游 Landlock 用户态文档](https://docs.kernel.org/userspace-api/landlock.html)。真实生产 Secure MCP Tunnel 验收证据也仍待补齐。
