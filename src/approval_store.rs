@@ -68,6 +68,9 @@ impl ApprovalStore {
     }
 
     pub fn publish(&self, record: &ApprovalRecord) -> std::io::Result<()> {
+        if !valid_ticket_id(&record.ticket_id) {
+            return Err(std::io::Error::other("invalid approval ticket id"));
+        }
         if record.summary.len() > 512 || record.capability.len() > 64 {
             return Err(std::io::Error::other("approval summary exceeds its limit"));
         }
@@ -427,6 +430,24 @@ mod tests {
         assert!(ApprovalStore::pending_any(&record.ticket_id)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn publish_rejects_ticket_ids_outside_the_store_namespace() {
+        let store = ApprovalStore::new(None).unwrap();
+        let record = ApprovalRecord {
+            ticket_id: "../outside".into(),
+            capability: "process.execute".into(),
+            summary: "Must not escape".into(),
+            expires_unix_s: now_unix_s() + 60,
+        };
+        assert!(store.publish(&record).is_err());
+        assert!(!store
+            .session_dir
+            .parent()
+            .unwrap()
+            .join("outside.json")
+            .exists());
     }
 
     #[test]
