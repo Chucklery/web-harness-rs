@@ -166,7 +166,8 @@ impl RuntimeTool for GitRuntime {
                     return Ok(json!({
                         "status": "approval_required",
                         "approval": approval,
-                        "risk": risk.as_str()
+                        "risk": risk.as_str(),
+                        "capability": capability.as_str()
                     }));
                 }
                 if let Some(expected_head) = expected_head.as_deref() {

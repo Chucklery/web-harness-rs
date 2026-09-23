@@ -534,6 +534,10 @@ fn git_mutation_requires_and_consumes_approval() {
     stdin.flush().unwrap();
     let elicitation: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(elicitation["method"], "elicitation/create");
+    assert!(elicitation["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("git.local.write"));
     let elicitation_id = elicitation["id"].clone();
 
     writeln!(
