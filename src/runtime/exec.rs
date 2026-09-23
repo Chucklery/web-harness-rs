@@ -185,14 +185,14 @@ impl RuntimeTool for ExecRuntime {
                     ),
                     _ => unreachable!("only command capabilities are handled here"),
                 };
-                return Ok(request_approval(
+                return request_approval(
                     context,
                     &command_authorization,
                     "approval_id",
                     capability,
                     summary,
                     reason,
-                ));
+                );
             }
         }
 
@@ -212,7 +212,7 @@ impl RuntimeTool for ExecRuntime {
                     })?;
                 approvals.push((approval_id.to_string(), git_authorization));
             } else {
-                return Ok(request_approval(
+                return request_approval(
                     context,
                     &git_authorization,
                     "git_approval_id",
@@ -229,7 +229,7 @@ impl RuntimeTool for ExecRuntime {
                         CommandRisk::GitLocalWrite => "A Git mutation in script mode requires a separate git.local.write approval".to_string(),
                         CommandRisk::GitRemoteWrite => "A Git push in script mode requires a separate git.remote.write approval".to_string(),
                     },
-                ));
+                );
             }
         }
 
@@ -246,7 +246,7 @@ impl RuntimeTool for ExecRuntime {
                     })?;
                 approvals.push((approval_id.to_string(), network_authorization));
             } else {
-                return Ok(request_approval(
+                return request_approval(
                     context,
                     &network_authorization,
                     "network_approval_id",
@@ -257,7 +257,7 @@ impl RuntimeTool for ExecRuntime {
                     ),
                     "Outbound network is denied by default and requires explicit one-time approval"
                         .to_string(),
-                ));
+                );
             }
         }
         if !approvals.is_empty() {
@@ -315,16 +315,21 @@ fn request_approval(
     capability: Capability,
     summary: String,
     reason: String,
-) -> Value {
+) -> Result<Value, RuntimeToolError> {
     let approval = context
         .permissions()
-        .request_action(authorization, summary, reason);
-    json!({
+        .request_action(authorization, summary, reason)
+        .map_err(permission_error)?;
+    Ok(json!({
         "status": "approval_required",
         "approval": approval,
         "capability": capability.as_str(),
         "approval_argument": argument_name
-    })
+    }))
+}
+
+fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolError {
+    RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
 }
 
 fn validate_script_shell(shell: &str) -> Result<(), RuntimeToolError> {
@@ -489,11 +494,10 @@ mod tests {
             stdin: Some("printf 'git push policy probe\\n'".into()),
             protected_read: false,
         };
-        let network_ticket = context.permissions().request_action(
-            &network_authorization,
-            "network only".into(),
-            "test".into(),
-        );
+        let network_ticket = context
+            .permissions()
+            .request_action(&network_authorization, "network only".into(), "test".into())
+            .unwrap();
         context.permissions().approve(&network_ticket.id).unwrap();
         let mut mismatched_retry = retry.as_object().unwrap().clone();
         mismatched_retry.insert("git_approval_id".into(), json!(network_ticket.id));

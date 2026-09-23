@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
+mod approval_store;
 mod atomic_file;
 mod command_output;
 mod command_policy;
@@ -102,6 +104,11 @@ enum Command {
     },
     Status,
     Disconnect,
+    Approvals,
+    Approve {
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+    },
     SelfTest {
         #[arg(long, value_name = "PATH", default_value = ".")]
         workspace: PathBuf,
@@ -158,6 +165,32 @@ fn main() {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
+}
+
+fn approve_from_terminal(ticket_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err("approval requires an interactive local terminal".into());
+    }
+    let pending = approval_store::ApprovalStore::pending_any(ticket_id)?
+        .ok_or("approval ticket is missing or expired")?;
+    println!("Pending one-time approval:");
+    println!("  capability: {}", pending.capability);
+    println!("  request:    {}", pending.summary);
+    print!("Approve this request once? [y/N] ");
+    io::stdout().flush()?;
+
+    let stdin = io::stdin();
+    let mut answer = Vec::new();
+    stdin.lock().take(16).read_until(b'\n', &mut answer)?;
+    let answer = String::from_utf8_lossy(&answer);
+    if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
+        println!("Approval declined.");
+        return Ok(());
+    }
+    approval_store::ApprovalStore::approve(ticket_id)?
+        .ok_or("approval ticket expired or was already consumed")?;
+    println!("Approved once. Retry the exact original tool call.");
+    Ok(())
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -229,6 +262,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let status = runtime::disconnect()?;
             println!("{}", runtime::format_status(&status));
         }
+        Command::Approvals => {
+            let approvals = approval_store::ApprovalStore::list_pending()?;
+            if approvals.is_empty() {
+                println!("No pending approvals.");
+            } else {
+                for approval in approvals {
+                    println!(
+                        "{}  {}  {} (expires at unix {})",
+                        approval.ticket_id,
+                        approval.capability,
+                        approval.summary,
+                        approval.expires_unix_s
+                    );
+                }
+            }
+        }
+        Command::Approve { ticket_id } => approve_from_terminal(&ticket_id)?,
         Command::SelfTest { workspace } => {
             let workspace = workspace::Workspace::new(workspace)?;
             let info = workspace.info();

@@ -1,7 +1,9 @@
+use crate::approval_store::{ApprovalRecord, ApprovalStore, MAX_PENDING_TICKETS};
 use crate::sandbox::NetworkPolicy;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -83,6 +85,10 @@ pub enum PermissionError {
     ApprovalRequired(&'static str),
     #[error("failed to initialize approval secret")]
     Random,
+    #[error("approval ticket capacity reached")]
+    Limit,
+    #[error("approval control store failed: {0}")]
+    Store(#[from] std::io::Error),
 }
 
 struct Ticket {
@@ -94,15 +100,28 @@ struct Ticket {
 pub struct PermissionEngine {
     secret: [u8; 32],
     tickets: HashMap<String, Ticket>,
+    approval_store: Option<ApprovalStore>,
+    workspace_root: Option<PathBuf>,
 }
 
 impl PermissionEngine {
+    pub fn for_workspace(workspace: &crate::workspace::Workspace) -> Result<Self, PermissionError> {
+        Self::with_workspace(Some(workspace.root().to_path_buf()))
+    }
+
+    #[cfg(test)]
     pub fn new() -> Result<Self, PermissionError> {
+        Self::with_workspace(None)
+    }
+
+    fn with_workspace(workspace_root: Option<PathBuf>) -> Result<Self, PermissionError> {
         let mut secret = [0u8; 32];
         getrandom::fill(&mut secret).map_err(|_| PermissionError::Random)?;
         Ok(Self {
             secret,
             tickets: HashMap::new(),
+            approval_store: None,
+            workspace_root,
         })
     }
 
@@ -118,27 +137,54 @@ impl PermissionEngine {
         request: &ExecAuthorization,
         summary: String,
         reason: String,
-    ) -> ApprovalRequest {
+    ) -> Result<ApprovalRequest, PermissionError> {
         self.cleanup();
+        if self.tickets.len() >= MAX_PENDING_TICKETS {
+            return Err(PermissionError::Limit);
+        }
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).map_err(|_| PermissionError::Random)?;
+        let nonce = format!("{:032x}", u128::from_ne_bytes(nonce));
         let id = format!(
-            "apr_{}_{}",
+            "apr_{}_{}_{}",
             std::process::id(),
-            NEXT_TICKET.fetch_add(1, Ordering::Relaxed)
+            NEXT_TICKET.fetch_add(1, Ordering::Relaxed),
+            nonce
         );
+        let expires_at = Instant::now() + TICKET_TTL;
+        let wall_now = std::time::SystemTime::now();
+        let expires_unix_s = wall_now
+            .checked_add(TICKET_TTL)
+            .unwrap_or(wall_now)
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if self.approval_store.is_none() {
+            self.approval_store = Some(ApprovalStore::new(self.workspace_root.as_deref())?);
+        }
+        self.approval_store
+            .as_ref()
+            .unwrap()
+            .publish(&ApprovalRecord {
+                ticket_id: id.clone(),
+                capability: request.capability.as_str().into(),
+                summary: summary.clone(),
+                expires_unix_s,
+            })?;
         self.tickets.insert(
             id.clone(),
             Ticket {
                 digest: self.digest(request),
-                expires: Instant::now() + TICKET_TTL,
+                expires: expires_at,
                 approved: false,
             },
         );
-        ApprovalRequest {
+        Ok(ApprovalRequest {
             id,
             summary,
             reason,
             expires_in_seconds: TICKET_TTL.as_secs(),
-        }
+        })
     }
 
     pub fn approve(&mut self, id: &str) -> Result<(), PermissionError> {
@@ -151,6 +197,9 @@ impl PermissionEngine {
     pub fn deny(&mut self, id: &str) -> Result<(), PermissionError> {
         self.cleanup();
         self.tickets.remove(id).ok_or(PermissionError::NotFound)?;
+        if let Some(store) = &self.approval_store {
+            store.consume(id);
+        }
         Ok(())
     }
 
@@ -161,6 +210,9 @@ impl PermissionEngine {
     ) -> Result<(), PermissionError> {
         self.validate_exec(id, request)?;
         self.tickets.remove(id);
+        if let Some(store) = &self.approval_store {
+            store.consume(id);
+        }
         Ok(())
     }
 
@@ -173,6 +225,9 @@ impl PermissionEngine {
         }
         for (id, _) in requests {
             self.tickets.remove(id);
+            if let Some(store) = &self.approval_store {
+                store.consume(id);
+            }
         }
         Ok(())
     }
@@ -188,7 +243,11 @@ impl PermissionEngine {
             self.tickets.remove(id);
             return Err(PermissionError::Expired);
         }
-        if !ticket.approved {
+        let local_approval = match &self.approval_store {
+            Some(store) => store.is_approved(id)?,
+            None => false,
+        };
+        if !ticket.approved && !local_approval {
             return Err(PermissionError::NotApproved);
         }
         if ticket.digest != self.digest(request) {
@@ -237,7 +296,18 @@ impl PermissionEngine {
 
     fn cleanup(&mut self) {
         let now = Instant::now();
+        let expired = self
+            .tickets
+            .iter()
+            .filter(|(_, ticket)| ticket.expires <= now)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
         self.tickets.retain(|_, ticket| ticket.expires > now);
+        if let Some(store) = &self.approval_store {
+            for id in expired {
+                store.consume(&id);
+            }
+        }
     }
 }
 
@@ -262,7 +332,9 @@ mod tests {
         engine: &mut PermissionEngine,
         request: &ExecAuthorization,
     ) -> ApprovalRequest {
-        engine.request_action(request, "test".into(), "test".into())
+        engine
+            .request_action(request, "test".into(), "test".into())
+            .unwrap()
     }
 
     #[test]
@@ -281,7 +353,9 @@ mod tests {
     fn approval_is_bound_to_capability() {
         let mut engine = PermissionEngine::new().unwrap();
         let request = request(&["git", "push"]);
-        let ticket = engine.request_action(&request, "test".into(), "test".into());
+        let ticket = engine
+            .request_action(&request, "test".into(), "test".into())
+            .unwrap();
         engine.approve(&ticket.id).unwrap();
         let mut changed = request.clone();
         changed.capability = Capability::GitRemoteWrite;
@@ -353,6 +427,43 @@ mod tests {
     }
 
     #[test]
+    fn local_cli_approval_uses_the_same_bound_one_shot_ticket() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let approved_request = request(&["cargo", "test"]);
+        let ticket = request_ticket(&mut engine, &approved_request);
+
+        ApprovalStore::approve(&ticket.id).unwrap().unwrap();
+        engine.consume_exec(&ticket.id, &approved_request).unwrap();
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &approved_request),
+            Err(PermissionError::NotFound)
+        ));
+
+        let changed_request = request(&["cargo", "check"]);
+        let ticket = request_ticket(&mut engine, &approved_request);
+        ApprovalStore::approve(&ticket.id).unwrap().unwrap();
+        assert!(matches!(
+            engine.consume_exec(&ticket.id, &changed_request),
+            Err(PermissionError::Mismatch)
+        ));
+    }
+
+    #[test]
+    fn pending_approval_tickets_have_a_hard_capacity() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let request = request(&["cargo", "test"]);
+        for _ in 0..MAX_PENDING_TICKETS {
+            engine
+                .request_action(&request, "test".into(), "test".into())
+                .unwrap();
+        }
+        assert!(matches!(
+            engine.request_action(&request, "overflow".into(), "test".into()),
+            Err(PermissionError::Limit)
+        ));
+    }
+
+    #[test]
     fn multi_capability_consumption_is_atomic() {
         let mut engine = PermissionEngine::new().unwrap();
         let mut git_request = request(&["git", "push"]);
@@ -402,7 +513,9 @@ mod tests {
         let mut engine = PermissionEngine::new().unwrap();
         let mut approved = request(&["git", "push"]);
         approved.capability = Capability::GitLocalWrite;
-        let ticket = engine.request_action(&approved, "test".into(), "test".into());
+        let ticket = engine
+            .request_action(&approved, "test".into(), "test".into())
+            .unwrap();
         engine.approve(&ticket.id).unwrap();
 
         let mut wrong_capability = approved.clone();

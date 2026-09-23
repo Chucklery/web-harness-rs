@@ -47,7 +47,7 @@ fn serve<R: BufRead, W: Write>(
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut jobs = JobManager::new();
-    let mut permissions = PermissionEngine::new()?;
+    let mut permissions = PermissionEngine::for_workspace(workspace)?;
     let runtime = RuntimeRegistry::default();
     let mut session = Session::new();
     loop {
@@ -497,20 +497,22 @@ mod tests {
             crate::permission::Capability::GitLocalWrite,
             crate::permission::Capability::NetworkOutbound,
         ] {
-            let ticket = permissions.request_action(
-                &crate::permission::ExecAuthorization {
-                    capability,
-                    argv: vec!["sh".into()],
-                    cwd: None,
-                    background: false,
-                    network: crate::sandbox::NetworkPolicy::Deny,
-                    expected_head: None,
-                    stdin: Some("git add file".into()),
-                    protected_read: false,
-                },
-                "test approval".into(),
-                "test".into(),
-            );
+            let ticket = permissions
+                .request_action(
+                    &crate::permission::ExecAuthorization {
+                        capability,
+                        argv: vec!["sh".into()],
+                        cwd: None,
+                        background: false,
+                        network: crate::sandbox::NetworkPolicy::Deny,
+                        expected_head: None,
+                        stdin: Some("git add file".into()),
+                        protected_read: false,
+                    },
+                    "test approval".into(),
+                    "test".into(),
+                )
+                .unwrap();
             ticket_ids.push(ticket.id);
         }
         let request = Request {

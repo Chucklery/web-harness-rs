@@ -155,10 +155,10 @@ impl RuntimeTool for GitRuntime {
                                 .to_string(),
                         )
                     };
-                    let approval =
-                        context
-                            .permissions()
-                            .request_action(&authorization, summary, reason);
+                    let approval = context
+                        .permissions()
+                        .request_action(&authorization, summary, reason)
+                        .map_err(permission_error)?;
                     return Ok(json!({
                         "status": "approval_required",
                         "approval": approval,

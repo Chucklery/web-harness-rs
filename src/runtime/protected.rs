@@ -32,11 +32,14 @@ pub fn authorize_or_request(
         return Ok(None);
     }
 
-    let approval = context.permissions().request_action(
-        authorization,
-        summary.to_string(),
-        "Sensitive paths require explicit one-time user approval".into(),
-    );
+    let approval = context
+        .permissions()
+        .request_action(
+            authorization,
+            summary.to_string(),
+            "Sensitive paths require explicit one-time user approval".into(),
+        )
+        .map_err(permission_error)?;
     Ok(Some(json!({
         "status": "approval_required",
         "approval": approval,
