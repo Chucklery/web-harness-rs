@@ -511,9 +511,42 @@ fn stdio_mcp_rejects_search_query_and_queries_together() {
 fn git_push_outbound_requires_both_host_approvals_before_spawn() {
     let binary = env!("CARGO_BIN_EXE_web-harness");
     let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let remote = workspace.join("remote.git");
+    std::fs::create_dir(&workspace).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&remote)
+        .status()
+        .unwrap()
+        .success());
     assert!(Command::new("git")
         .args(["init", "-q"])
-        .current_dir(dir.path())
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(workspace.join("payload.txt"), "approval-gated push\n").unwrap();
+    for (key, value) in [
+        ("user.name", "Harness Test"),
+        ("user.email", "harness@example.invalid"),
+    ] {
+        assert!(Command::new("git")
+            .args(["config", key, value])
+            .current_dir(&workspace)
+            .status()
+            .unwrap()
+            .success());
+    }
+    assert!(Command::new("git")
+        .args(["add", "payload.txt"])
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["commit", "-qm", "seed"])
+        .current_dir(&workspace)
         .status()
         .unwrap()
         .success());
@@ -523,7 +556,7 @@ fn git_push_outbound_requires_both_host_approvals_before_spawn() {
             "serve",
             "--stdio",
             "--workspace",
-            dir.path().to_str().unwrap(),
+            workspace.to_str().unwrap(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -555,7 +588,7 @@ fn git_push_outbound_requires_both_host_approvals_before_spawn() {
             "jsonrpc":"2.0",
             "id":2,
             "method":"tools/call",
-            "params":{"name":"exec","arguments":{"argv":["git","push"],"network":"outbound"}}
+            "params":{"name":"exec","arguments":{"argv":["git","push",remote.to_str().unwrap(),"HEAD:refs/heads/approval-probe"],"network":"outbound"}}
         })
     )
     .unwrap();
@@ -563,6 +596,17 @@ fn git_push_outbound_requires_both_host_approvals_before_spawn() {
 
     let git_approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(git_approval["method"], "elicitation/create");
+    assert!(git_approval["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("git.remote.write"));
+    assert!(!Command::new("git")
+        .args(["--git-dir"])
+        .arg(&remote)
+        .args(["rev-parse", "--verify", "refs/heads/approval-probe"])
+        .status()
+        .unwrap()
+        .success());
     writeln!(
         stdin,
         "{}",
@@ -577,6 +621,17 @@ fn git_push_outbound_requires_both_host_approvals_before_spawn() {
 
     let network_approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(network_approval["method"], "elicitation/create");
+    assert!(network_approval["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("network.outbound"));
+    assert!(!Command::new("git")
+        .args(["--git-dir"])
+        .arg(&remote)
+        .args(["rev-parse", "--verify", "refs/heads/approval-probe"])
+        .status()
+        .unwrap()
+        .success());
     writeln!(
         stdin,
         "{}",
@@ -592,7 +647,14 @@ fn git_push_outbound_requires_both_host_approvals_before_spawn() {
     let result: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(result["id"], 2);
     assert!(result.get("error").is_none());
-    assert_eq!(result["result"]["structuredContent"]["exit_code"], 128);
+    assert_eq!(result["result"]["structuredContent"]["exit_code"], 0);
+    assert!(Command::new("git")
+        .args(["--git-dir"])
+        .arg(&remote)
+        .args(["rev-parse", "--verify", "refs/heads/approval-probe"])
+        .status()
+        .unwrap()
+        .success());
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

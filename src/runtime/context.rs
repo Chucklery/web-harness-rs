@@ -56,14 +56,32 @@ impl<'a> ExecutionContext<'a> {
         jobs: &'a mut JobManager,
         permissions: &'a mut PermissionEngine,
     ) -> Self {
+        Self::with_sandbox(workspace, jobs, permissions, SandboxBackend::detect())
+    }
+
+    pub(crate) fn with_sandbox(
+        workspace: &'a Workspace,
+        jobs: &'a mut JobManager,
+        permissions: &'a mut PermissionEngine,
+        sandbox: SandboxBackend,
+    ) -> Self {
         Self {
             workspace,
             jobs,
             permissions,
-            sandbox: SandboxBackend::detect(),
+            sandbox,
             limits: RuntimeLimits::default(),
             environment: RuntimeEnvironment::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_unavailable_sandbox(
+        workspace: &'a Workspace,
+        jobs: &'a mut JobManager,
+        permissions: &'a mut PermissionEngine,
+    ) -> Self {
+        Self::with_sandbox(workspace, jobs, permissions, SandboxBackend::Unavailable)
     }
 
     pub fn workspace(&self) -> &Workspace {

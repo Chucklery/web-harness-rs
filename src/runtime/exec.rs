@@ -424,6 +424,25 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_sandbox_requires_per_invocation_process_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context =
+            ExecutionContext::with_unavailable_sandbox(&workspace, &mut jobs, &mut permissions);
+
+        for argv in [vec!["printf", "one"], vec!["printf", "two"]] {
+            let result = ExecRuntime
+                .call(&mut context, &json!({"argv": argv}))
+                .unwrap();
+            assert_eq!(result["status"], "approval_required");
+            assert_eq!(result["capability"], "process.execute");
+            assert_eq!(result["approval_argument"], "approval_id");
+        }
+    }
+
+    #[test]
     fn opaque_command_launchers_require_exact_process_approval() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
