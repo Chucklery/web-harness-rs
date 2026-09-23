@@ -364,15 +364,15 @@ fn local_fixture_roundtrip() -> Result<(), TunnelError> {
             "invalid fixture tools/list response".into(),
         ));
     }
-    let recovered = client.request(
-        "tools/call",
-        json!({"name":"read_files","arguments":{"paths":["missing-fixture.txt"]}}),
+    let mixed_read = client.call_tool(
+        "read_files",
+        json!({"paths":["hello.txt","missing-fixture.txt"]}),
     )?;
-    if recovered["result"]["isError"] != true
-        || recovered["result"]["structuredContent"]["error"]["code"].is_null()
+    if mixed_read["files"][0]["text"] != "needle\n"
+        || mixed_read["files"][1]["error"]["code"] != "not_found"
     {
         return Err(TunnelError::Local(
-            "fixture error response was not structured or recoverable".into(),
+            "fixture batch read did not preserve independent path results".into(),
         ));
     }
     client.call_tool("workspace_info", json!({}))?;

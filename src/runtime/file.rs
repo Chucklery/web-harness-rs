@@ -78,7 +78,31 @@ impl RuntimeTool for FileRuntime {
         let mut total = 0usize;
         let mut files = Vec::with_capacity(values.len());
         for request in &requests {
-            let read = read_range(context, request, limits.max_read_file_bytes)?;
+            let remaining = limits.max_read_batch_bytes.saturating_sub(total);
+            if remaining == 0 {
+                files.push(json!({
+                    "path": request.path,
+                    "error": {
+                        "code": "limit_exceeded",
+                        "message": "batch read has no remaining byte budget"
+                    }
+                }));
+                continue;
+            }
+            let max_bytes = limits.max_read_file_bytes.min(remaining);
+            let read = match read_range(context, request, max_bytes) {
+                Ok(read) => read,
+                Err(error) => {
+                    files.push(json!({
+                        "path": request.path,
+                        "error": {
+                            "code": read_error_code(error.kind()),
+                            "message": error.message()
+                        }
+                    }));
+                    continue;
+                }
+            };
             total = total.checked_add(read.text.len()).ok_or_else(|| {
                 RuntimeToolError::new(
                     RuntimeErrorKind::LimitExceeded,
@@ -87,8 +111,8 @@ impl RuntimeTool for FileRuntime {
             })?;
             if total > limits.max_read_batch_bytes {
                 return Err(RuntimeToolError::new(
-                    RuntimeErrorKind::LimitExceeded,
-                    "batch read exceeds 512 KiB",
+                    RuntimeErrorKind::Execution,
+                    "internal read batch budget accounting exceeded its hard limit",
                 ));
             }
             let next = if read.truncated {
@@ -112,6 +136,23 @@ impl RuntimeTool for FileRuntime {
             }));
         }
         Ok(json!({"files": files}))
+    }
+}
+
+fn read_error_code(kind: RuntimeErrorKind) -> &'static str {
+    match kind {
+        RuntimeErrorKind::InvalidArguments => "invalid_arguments",
+        RuntimeErrorKind::Workspace => "workspace_error",
+        RuntimeErrorKind::NotFound => "not_found",
+        RuntimeErrorKind::Denied => "denied",
+        RuntimeErrorKind::NotRegularFile => "not_regular_file",
+        RuntimeErrorKind::InvalidEncoding => "invalid_encoding",
+        RuntimeErrorKind::Range => "out_of_range",
+        RuntimeErrorKind::LimitExceeded => "limit_exceeded",
+        RuntimeErrorKind::Execution => "execution_failed",
+        RuntimeErrorKind::Permission => "permission_denied",
+        RuntimeErrorKind::Conflict => "conflict",
+        RuntimeErrorKind::Dependency => "dependency_unavailable",
     }
 }
 
@@ -229,6 +270,12 @@ fn read_range(
         if request.end_line.is_some_and(|end| line_number > end) {
             break;
         }
+        if line.len() > max_bytes {
+            return Err(RuntimeToolError::new(
+                RuntimeErrorKind::LimitExceeded,
+                "a complete line exceeds the remaining read byte budget and cannot be continued safely",
+            ));
+        }
         if text.len() + line.len() > max_bytes {
             truncated = true;
             break;
@@ -328,13 +375,13 @@ mod tests {
         fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
-        let error = FileRuntime
+        let result = FileRuntime
             .call(
                 &mut context(&workspace, &mut jobs, &mut permissions),
                 &json!({"paths": [{"path":"a.txt", "expected_read_revision":revision}]}),
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeErrorKind::Conflict);
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "conflict");
     }
 
     #[test]
@@ -354,19 +401,87 @@ mod tests {
     }
 
     #[test]
+    fn returns_per_path_errors_without_discarding_other_batch_results() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("valid.txt"), "read me\n").unwrap();
+        fs::write(dir.path().join("binary.dat"), [0xff, 0xfe]).unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let result = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths":["valid.txt","missing.txt","folder","binary.dat"]}),
+            )
+            .unwrap();
+
+        assert_eq!(result["files"].as_array().unwrap().len(), 4);
+        assert_eq!(result["files"][0]["text"], "read me\n");
+        assert_eq!(result["files"][1]["error"]["code"], "not_found");
+        assert_eq!(result["files"][2]["error"]["code"], "not_regular_file");
+        assert_eq!(result["files"][3]["error"]["code"], "invalid_encoding");
+    }
+
+    #[test]
+    fn keeps_successful_read_content_within_the_shared_batch_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            let content = std::iter::repeat_n("x\n", 150 * 1024).collect::<String>();
+            fs::write(dir.path().join(name), content).unwrap();
+        }
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let result = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths":["a.txt","b.txt","c.txt"]}),
+            )
+            .unwrap();
+        let files = result["files"].as_array().unwrap();
+        let returned_bytes: usize = files
+            .iter()
+            .filter_map(|file| file["text"].as_str())
+            .map(str::len)
+            .sum();
+        assert!(returned_bytes <= 512 * 1024);
+        assert!(files[0]["truncated"].as_bool().unwrap());
+        assert!(files[1]["truncated"].as_bool().unwrap());
+        assert_eq!(files[2]["error"]["code"], "limit_exceeded");
+    }
+
+    #[test]
+    fn rejects_a_line_that_cannot_fit_in_one_read_page() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("long-line.txt"), vec![b'x'; 300 * 1024]).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let result = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths":["long-line.txt"]}),
+            )
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "limit_exceeded");
+        assert!(result["files"][0].get("next").is_none());
+    }
+
+    #[test]
     fn rejects_non_utf8_files_with_a_distinct_error() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("binary.dat"), [0xff, 0xfe]).unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
-        let error = FileRuntime
+        let result = FileRuntime
             .call(
                 &mut context(&workspace, &mut jobs, &mut permissions),
                 &json!({"paths": ["binary.dat"]}),
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeErrorKind::InvalidEncoding);
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "invalid_encoding");
     }
 
     #[test]
@@ -376,13 +491,13 @@ mod tests {
         let workspace = Workspace::new(dir.path()).unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
-        let error = FileRuntime
+        let result = FileRuntime
             .call(
                 &mut context(&workspace, &mut jobs, &mut permissions),
                 &json!({"paths": [{"path": "a.txt", "start_line": 4}]}),
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeErrorKind::Range);
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "out_of_range");
     }
 
     #[test]
@@ -392,13 +507,13 @@ mod tests {
         let workspace = Workspace::new(dir.path()).unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
-        let error = FileRuntime
+        let result = FileRuntime
             .call(
                 &mut context(&workspace, &mut jobs, &mut permissions),
                 &json!({"paths": ["nested"]}),
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeErrorKind::NotRegularFile);
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "not_regular_file");
     }
 
     #[test]
@@ -408,13 +523,13 @@ mod tests {
         let workspace = Workspace::with_denied(dir.path(), &["hidden.txt".to_string()]).unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
-        let error = FileRuntime
+        let result = FileRuntime
             .call(
                 &mut context(&workspace, &mut jobs, &mut permissions),
                 &json!({"paths": ["hidden.txt"]}),
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeErrorKind::Denied);
+            .unwrap();
+        assert_eq!(result["files"][0]["error"]["code"], "denied");
     }
 
     #[test]

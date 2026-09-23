@@ -27,13 +27,15 @@ Returns the canonical configured workspace root.
 
 Reads up to 16 UTF-8 files per call.
 
-Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded metadata-plus-content-sample `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Common protected paths (`.env`, private keys, credentials, and similar files) return an approval ticket; retry with its `approval_id` after host confirmation.
+Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded metadata-plus-content-sample `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Batch items return independently: a missing, denied, non-regular, non-UTF-8, out-of-range, or otherwise unreadable path carries its own structured `error` while other items still return their content. The 512 KiB total content limit remains shared across successful items; later paths receive `limit_exceeded` once no batch budget remains. Common protected paths (`.env`, private keys, credentials, and similar files) require an approval ticket; retry with its `approval_id` after host confirmation.
 
 Current limits:
 
 - 256 KiB per file
 - 512 KiB total per batch
 - all paths must remain inside the workspace
+
+A complete line must fit within the remaining page and batch byte budget. If a single line does not fit, that item returns `limit_exceeded` instead of a continuation that cannot advance.
 
 ## list_files
 
