@@ -350,19 +350,23 @@ fn validate_api_key(value: &str) -> Result<(), OnboardingError> {
 fn credential_store_path() -> Result<PathBuf, OnboardingError> {
     #[cfg(windows)]
     {
-        if let Some(root) = std::env::var_os("APPDATA") {
-            return Ok(PathBuf::from(root).join("web-harness/credentials.env"));
-        }
-        let home = config::user_home_dir().ok_or(config::ConfigError::MissingHome)?;
-        return Ok(home.join(".web-harness/credentials.env"));
+        let path = match std::env::var_os("APPDATA") {
+            Some(root) => PathBuf::from(root).join("web-harness/credentials.env"),
+            None => config::user_home_dir()
+                .ok_or(config::ConfigError::MissingHome)?
+                .join(".web-harness/credentials.env"),
+        };
+        Ok(path)
     }
     #[cfg(not(windows))]
     {
-        if let Some(zdotdir) = std::env::var_os("ZDOTDIR") {
-            return Ok(PathBuf::from(zdotdir).join(".zshrc"));
-        }
-        let home = config::user_home_dir().ok_or(config::ConfigError::MissingHome)?;
-        Ok(home.join(".zshrc"))
+        let path = match std::env::var_os("ZDOTDIR") {
+            Some(zdotdir) => PathBuf::from(zdotdir).join(".zshrc"),
+            None => config::user_home_dir()
+                .ok_or(config::ConfigError::MissingHome)?
+                .join(".zshrc"),
+        };
+        Ok(path)
     }
 }
 

@@ -572,6 +572,9 @@ mod tests {
             permissions.set_mode(0o755);
         }
         #[cfg(not(unix))]
+        // This fallback is only compiled for non-Unix targets where the
+        // read-only bit is a platform attribute, not Unix write permissions.
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(dir, permissions).unwrap();
     }

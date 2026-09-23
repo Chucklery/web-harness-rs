@@ -121,7 +121,7 @@ impl OutputCapture {
         Ok((bytes, next_cursor, truncated))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn retained_bytes(&self) -> usize {
         self.state.lock().unwrap().bytes.len()
     }

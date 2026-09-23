@@ -232,7 +232,7 @@ impl JobManager {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn start(
         &mut self,
         workspace: &Workspace,

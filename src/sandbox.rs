@@ -9,6 +9,7 @@ pub const SANDBOX_ENV_MARKER: &str = "WEB_HARNESS_SANDBOX";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxBackend {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     MacOsSeatbelt,
     Unavailable,
 }

@@ -97,6 +97,9 @@ pub fn stage_removal(path: &Path) -> io::Result<Staged> {
 ///
 /// The returned [`Staged`] must be either committed or discarded.
 pub fn stage(path: &Path, bytes: &[u8], private: bool) -> io::Result<Staged> {
+    #[cfg(not(unix))]
+    let _ = private;
+
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -153,6 +156,9 @@ pub fn stage(path: &Path, bytes: &[u8], private: bool) -> io::Result<Staged> {
 }
 
 pub fn write(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
+    #[cfg(not(unix))]
+    let _ = private;
+
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
