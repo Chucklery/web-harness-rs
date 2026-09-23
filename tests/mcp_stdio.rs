@@ -131,6 +131,14 @@ fn adaptive_runtime_control_tools_are_callable() {
                 "arguments":{"tool":"permission","arguments":{"action":"approve","id":"apr_x"}}
             }
         }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"tool_manifest","arguments":{"tool_name":"not-a-runtime-tool"}}
+        }),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":8,"method":"tools/call",
+            "params":{"name":"work_on_project","arguments":{"path":std::env::temp_dir()}}
+        }),
     ] {
         writeln!(stdin, "{}", request).unwrap();
     }
@@ -160,11 +168,32 @@ fn adaptive_runtime_control_tools_are_callable() {
     );
 
     let permission_bypass: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-    assert_eq!(permission_bypass["error"]["code"], -32602);
-    assert!(permission_bypass["error"]["message"]
+    assert!(permission_bypass.get("error").is_none());
+    assert_eq!(permission_bypass["result"]["isError"], true);
+    assert_eq!(
+        permission_bypass["result"]["structuredContent"]["error"]["code"],
+        -32602
+    );
+    let permission_message = permission_bypass["result"]["content"][0]["text"]
         .as_str()
-        .unwrap()
-        .contains("not exposed"));
+        .unwrap();
+    assert!(permission_message.contains("not exposed"));
+
+    let unknown_manifest: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert!(unknown_manifest.get("error").is_none());
+    assert_eq!(unknown_manifest["result"]["isError"], true);
+    assert_eq!(
+        unknown_manifest["result"]["structuredContent"]["error"]["code"],
+        -32602
+    );
+
+    let workspace_escape: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert!(workspace_escape.get("error").is_none());
+    assert_eq!(workspace_escape["result"]["isError"], true);
+    assert_eq!(
+        workspace_escape["result"]["structuredContent"]["error"]["code"],
+        -32007
+    );
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
@@ -239,6 +268,7 @@ fn opaque_exec_launcher_requires_host_approval_before_spawn() {
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     let denied: Value = serde_json::from_str(text).unwrap();
     assert_eq!(denied["status"], "denied");
+    assert_eq!(response["result"]["isError"], true);
     assert!(!marker.exists(), "declined command must never spawn");
 
     drop(stdin);
@@ -637,6 +667,7 @@ fn host_decline_does_not_run_git_mutation() {
     let text = result["result"]["content"][0]["text"].as_str().unwrap();
     let denied: Value = serde_json::from_str(text).unwrap();
     assert_eq!(denied["status"], "denied");
+    assert_eq!(result["result"]["isError"], true);
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

@@ -218,13 +218,15 @@ fn denied_response(response: &Response) -> Response {
         .and_then(|value| value.get("capability"))
         .cloned()
         .unwrap_or(Value::Null);
+    let mut result = runtime_content(json!({
+        "status": "denied",
+        "capability": capability
+    }));
+    result["isError"] = json!(true);
     Response {
         jsonrpc: "2.0",
         id: response.id.clone(),
-        result: Some(runtime_content(json!({
-            "status": "denied",
-            "capability": capability
-        }))),
+        result: Some(result),
         error: None,
     }
 }
@@ -372,13 +374,31 @@ fn call_tool(
         "work_on_project" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             if let Some(path) = arguments.get("path").and_then(Value::as_str) {
-                let requested = std::fs::canonicalize(path)
-                    .map_err(|error| json!({"code": -32050, "message": error.to_string()}))?;
+                let requested = match std::fs::canonicalize(path) {
+                    Ok(requested) => requested,
+                    Err(error) => {
+                        let kind = if error.kind() == io::ErrorKind::NotFound {
+                            RuntimeErrorKind::NotFound
+                        } else {
+                            RuntimeErrorKind::Workspace
+                        };
+                        return Ok(runtime_tool_error(
+                            name,
+                            RuntimeToolError::new(
+                                kind,
+                                "requested workspace path could not be resolved",
+                            ),
+                        ));
+                    }
+                };
                 if requested != workspace.root() {
-                    return Err(json!({
-                        "code": -32051,
-                        "message": "web-harness is bound to one configured workspace; requested path does not match it"
-                    }));
+                    return Ok(runtime_tool_error(
+                        name,
+                        RuntimeToolError::new(
+                            RuntimeErrorKind::Denied,
+                            "web-harness is bound to one configured workspace; requested path does not match it",
+                        ),
+                    ));
                 }
             }
             let session_id = arguments
@@ -403,21 +423,32 @@ fn call_tool(
         "tool_manifest" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
             let requested = arguments.get("tool_name").and_then(Value::as_str);
-            manifest::describe(runtime, requested)
-                .map(runtime_content)
-                .map_err(|error| runtime_error("tool_manifest", error))
+            Ok(match manifest::describe(runtime, requested) {
+                Ok(value) => runtime_content(value),
+                Err(error) => runtime_tool_error("tool_manifest", error),
+            })
         }
         "call_runtime_tool" => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
-            let tool = arguments
-                .get("tool")
-                .and_then(Value::as_str)
-                .ok_or_else(|| json!({"code": -32602, "message": "arguments.tool is required"}))?;
+            let Some(tool) = arguments.get("tool").and_then(Value::as_str) else {
+                return Ok(runtime_tool_error(
+                    name,
+                    RuntimeToolError::new(
+                        RuntimeErrorKind::InvalidArguments,
+                        "arguments.tool is required",
+                    ),
+                ));
+            };
             if !runtime.contains(tool) {
-                return Err(json!({
-                    "code": -32602,
-                    "message": format!("runtime tool is not exposed through the compatibility gateway: {tool}")
-                }));
+                return Ok(runtime_tool_error(
+                    name,
+                    RuntimeToolError::new(
+                        RuntimeErrorKind::InvalidArguments,
+                        format!(
+                            "runtime tool is not exposed through the compatibility gateway: {tool}"
+                        ),
+                    ),
+                ));
             }
             let forwarded = json!({
                 "name": tool,
@@ -612,5 +643,6 @@ mod tests {
             responses[2]["result"]["structuredContent"]["status"],
             "denied"
         );
+        assert_eq!(responses[2]["result"]["isError"], true);
     }
 }
