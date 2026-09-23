@@ -115,3 +115,84 @@ fn reports_complete_bounded_external_evidence() {
         11
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn tunnel_accept_terminates_wrapper_descendants_before_draining_output() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let workspace = tempfile::tempdir().unwrap();
+    let wrapper = workspace.path().join("wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho $$ > \"$WEB_HARNESS_WORKSPACE/wrapper.pid\"\n/bin/sleep 60 &\necho $! > \"$WEB_HARNESS_WORKSPACE/sleeper.pid\"\nprintf '{}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let command_json = serde_json::json!([wrapper.display().to_string()]).to_string();
+    let mut child = Command::new(binary)
+        .args([
+            "tunnel",
+            "accept",
+            "--workspace",
+            workspace.path().to_str().unwrap(),
+            "--command-json",
+            &command_json,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            terminate_wrapper_group(workspace.path());
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("tunnel accept hung while a wrapper descendant held stdout open");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(status.code(), Some(2));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["external_command_passed"], false);
+
+    let sleeper_pid = std::fs::read_to_string(workspace.path().join("sleeper.pid"))
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    let reap_deadline = Instant::now() + Duration::from_secs(2);
+    while pid_is_alive(sleeper_pid) && Instant::now() < reap_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if pid_is_alive(sleeper_pid) {
+        terminate_wrapper_group(workspace.path());
+    }
+    assert!(!pid_is_alive(sleeper_pid));
+}
+
+#[cfg(unix)]
+fn terminate_wrapper_group(workspace: &std::path::Path) {
+    if let Ok(pid) = std::fs::read_to_string(workspace.join("wrapper.pid")) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}

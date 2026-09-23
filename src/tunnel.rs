@@ -137,6 +137,11 @@ pub fn accept(
         std::thread::sleep(Duration::from_millis(50));
     };
 
+    // A wrapper can exit while a descendant still holds stdout/stderr open.
+    // Stop the owned process group before joining the drainers, or a detached
+    // tunnel-client child can make this one-shot acceptance command hang.
+    cleanup_exited_child_group(child.child_mut().id())?;
+
     let stdout = stdout_reader
         .join()
         .map_err(|_| TunnelError::Local("external stdout reader panicked".into()))??;
@@ -164,6 +169,14 @@ pub fn accept(
         external_exit_code: status.code(),
         note,
     })
+}
+
+fn cleanup_exited_child_group(pid: u32) -> Result<(), TunnelError> {
+    #[cfg(unix)]
+    process::terminate_process_group(pid).map_err(|error| TunnelError::Local(error.to_string()))?;
+    #[cfg(not(unix))]
+    let _ = pid;
+    Ok(())
 }
 
 fn terminate_child(child: &mut Child) -> Result<(), TunnelError> {
