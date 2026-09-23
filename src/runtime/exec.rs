@@ -136,7 +136,7 @@ impl RuntimeTool for ExecRuntime {
         };
         let script_git_risk = script.as_deref().and_then(command_policy::script_git_risk);
         let protected_read = argv.iter().skip(1).any(|argument| {
-            path_policy::is_protected_workspace_path(context.workspace(), argument)
+            path_policy::is_protected_exec_path(context.workspace(), cwd, argument)
         });
         let authorization = ExecAuthorization {
             capability: command_capability.unwrap_or(Capability::ProcessExecute),
@@ -672,6 +672,26 @@ mod tests {
 
         let result = ExecRuntime
             .call(&mut context, &json!({"argv": ["cat", ".env"]}))
+            .unwrap();
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "process.execute");
+    }
+
+    #[test]
+    fn direct_exec_reading_protected_path_relative_to_cwd_requires_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("nested/.env"), "TOKEN=secret\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = ExecRuntime
+            .call(
+                &mut context,
+                &json!({"argv": ["cat", ".env"], "cwd": "nested"}),
+            )
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "process.execute");

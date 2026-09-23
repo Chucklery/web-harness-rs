@@ -16,6 +16,31 @@ pub fn is_protected_workspace_path(
         .is_ok_and(is_protected)
 }
 
+/// Classifies an exec path argument using the same workspace-relative cwd that
+/// the process launcher will resolve. Absolute arguments retain the existing
+/// workspace resolver semantics and are never reinterpreted as workspace paths.
+pub fn is_protected_exec_path(
+    workspace: &crate::workspace::Workspace,
+    cwd: Option<&str>,
+    argument: impl AsRef<Path>,
+) -> bool {
+    let argument = argument.as_ref();
+    if argument.is_absolute() {
+        return is_protected_workspace_path(workspace, argument);
+    }
+    let Some(cwd) = cwd else {
+        return is_protected_workspace_path(workspace, argument);
+    };
+    let Ok(cwd) = workspace.resolve(cwd) else {
+        return false;
+    };
+    let candidate = cwd.join(argument);
+    let Ok(relative) = candidate.strip_prefix(workspace.root()) else {
+        return false;
+    };
+    is_protected_workspace_path(workspace, relative)
+}
+
 pub const PROTECTED_GLOBS: &[&str] = &[
     "!**/.env",
     "!**/.env.*",
@@ -146,5 +171,31 @@ mod tests {
         assert!(is_protected(".ssh/id_ecdsa"));
         assert!(!is_protected(".env.example"));
         assert!(!is_protected("src/secretary.rs"));
+    }
+
+    #[test]
+    fn exec_path_classification_uses_the_effective_workspace_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("nested")).unwrap();
+        std::fs::write(root.path().join("nested/.env"), "TOKEN=secret").unwrap();
+        let workspace = crate::workspace::Workspace::new(root.path()).unwrap();
+
+        assert!(is_protected_exec_path(&workspace, Some("nested"), ".env"));
+        assert!(!is_protected_exec_path(
+            &workspace,
+            Some("nested"),
+            "regular.txt"
+        ));
+    }
+
+    #[test]
+    fn exec_path_classification_does_not_resolve_an_escaping_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::new(root.path()).unwrap();
+        assert!(!is_protected_exec_path(
+            &workspace,
+            Some("../outside"),
+            ".env"
+        ));
     }
 }
