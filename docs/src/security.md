@@ -49,7 +49,7 @@ The current pre-1.0 boundary still has known limits:
 - non-macOS platforms do not yet have a native sandbox backend and therefore rely on explicit approvals
 - secret redaction is heuristic and cannot recognize every possible secret format
 - broader sandbox compatibility testing is still needed across more developer toolchains and shell compositions
-- direct protected-path classification now covers common `.env`, private-key, and credential files for file reads, listing/search filtering, Git revision-file reads, and recognizable exec path arguments; those direct reads require one-time approval. Arbitrary scripts remain governed by their explicit script approval and the OS sandbox, so heuristic classification is not a complete audit of every possible command.
+- direct protected-path classification now covers common `.env`, private-key, and credential files for file reads, listing/search filtering, Git revision-file reads and diffs, and recognizable exec path arguments; Git diffs scan changed path names before returning content and require approval when protected files are included. A one-shot script containing recognizable `git` and `push` tokens additionally requires `git.remote.write`; this text heuristic is not a complete audit of arbitrary scripts, which remain governed by explicit script approval and the OS sandbox.
 - real production Secure MCP Tunnel acceptance evidence remains outstanding
 
 Do not treat pre-1.0 as a universally hardened remote-execution boundary across every platform and toolchain.
