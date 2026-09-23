@@ -5,23 +5,23 @@ use crate::runtime::{
     RuntimeToolError,
 };
 use crate::workspace::Workspace;
-use approval::{HostDecision, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 
 mod approval;
 mod tools;
+mod transport;
 
-const MAX_PROTOCOL_LINE_BYTES: usize = 2 * 1024 * 1024;
+pub(super) const MAX_PROTOCOL_LINE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
-struct Request {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
+pub(super) struct Request {
+    pub(super) jsonrpc: String,
+    pub(super) id: Option<Value>,
+    pub(super) method: String,
     #[serde(default)]
-    params: Value,
+    pub(super) params: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,134 +38,7 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let mut stdout = io::stdout().lock();
-    serve(&workspace, &mut stdin, &mut stdout)
-}
-
-fn serve<R: BufRead, W: Write>(
-    workspace: &Workspace,
-    stdin: &mut R,
-    stdout: &mut W,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut jobs = JobManager::new();
-    let mut permissions = PermissionEngine::for_workspace(workspace)?;
-    let runtime = RuntimeRegistry::default();
-    let mut session = Session::new();
-    loop {
-        let line = match read_bounded_line(stdin) {
-            Ok(Some(line)) => line,
-            Ok(None) => break,
-            Err(error) => {
-                let response = Response {
-                    jsonrpc: "2.0",
-                    id: None,
-                    result: None,
-                    error: Some(json!({"code": -32700, "message": error.to_string()})),
-                };
-                serde_json::to_writer(&mut *stdout, &response)?;
-                writeln!(stdout)?;
-                stdout.flush()?;
-                continue;
-            }
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let request = match serde_json::from_str::<Request>(&line) {
-            Ok(request) if request.id.is_none() && request.method.starts_with("notifications/") => {
-                continue;
-            }
-            Ok(request) => request,
-            Err(error) => {
-                let response = Response {
-                    jsonrpc: "2.0",
-                    id: None,
-                    result: None,
-                    error: Some(json!({"code": -32700, "message": error.to_string()})),
-                };
-                serde_json::to_writer(&mut *stdout, &response)?;
-                writeln!(stdout)?;
-                stdout.flush()?;
-                continue;
-            }
-        };
-        if request.method == "initialize" {
-            session.note_initialize(&request.params);
-        }
-        let mut response = handle(
-            request.clone(),
-            workspace,
-            &mut jobs,
-            &mut permissions,
-            &runtime,
-        );
-        let mut retry = request.clone();
-        let mut suppress_response = false;
-        while session.supports_elicitation() && request.method == "tools/call" {
-            let Some(pending) = approval::pending_approval(&response) else {
-                break;
-            };
-            match approval::request_host_approval(
-                stdin,
-                stdout,
-                &mut session,
-                &response,
-                request.id.as_ref(),
-            )? {
-                HostDecision::Accept => {
-                    permissions.approve(&pending.id)?;
-                    let arguments = retry
-                        .params
-                        .get_mut("arguments")
-                        .and_then(Value::as_object_mut)
-                        .ok_or("tools/call arguments must be an object")?;
-                    arguments.insert(pending.argument, Value::String(pending.id));
-                    response = handle(
-                        retry.clone(),
-                        workspace,
-                        &mut jobs,
-                        &mut permissions,
-                        &runtime,
-                    );
-                }
-                HostDecision::Decline => {
-                    revoke_request_approvals(&mut permissions, &retry, &pending.id);
-                    response = denied_response(&response);
-                    break;
-                }
-                HostDecision::Cancel => {
-                    revoke_request_approvals(&mut permissions, &retry, &pending.id);
-                    suppress_response = true;
-                    break;
-                }
-                HostDecision::Disconnected => break,
-            }
-        }
-        if suppress_response {
-            continue;
-        }
-        serde_json::to_writer(&mut *stdout, &response)?;
-        writeln!(stdout)?;
-        stdout.flush()?;
-    }
-    Ok(())
-}
-
-fn revoke_request_approvals(
-    permissions: &mut PermissionEngine,
-    request: &Request,
-    current_ticket: &str,
-) {
-    let mut ticket_ids = vec![current_ticket.to_string()];
-    if let Some(arguments) = request.params.get("arguments").and_then(Value::as_object) {
-        for argument in ["approval_id", "git_approval_id", "network_approval_id"] {
-            if let Some(ticket_id) = arguments.get(argument).and_then(Value::as_str) {
-                ticket_ids.push(ticket_id.to_string());
-            }
-        }
-    }
-    for ticket_id in ticket_ids {
-        let _ = permissions.deny(&ticket_id);
-    }
+    transport::serve(&workspace, &mut stdin, &mut stdout)
 }
 
 /// Read one UTF-8 protocol line while keeping both the retained bytes and the
@@ -210,7 +83,7 @@ fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-fn denied_response(response: &Response) -> Response {
+pub(super) fn denied_response(response: &Response) -> Response {
     let capability = response
         .result
         .as_ref()
@@ -231,7 +104,7 @@ fn denied_response(response: &Response) -> Response {
     }
 }
 
-fn handle(
+pub(super) fn handle(
     request: Request,
     workspace: &Workspace,
     jobs: &mut JobManager,
@@ -517,132 +390,5 @@ mod tests {
         assert_eq!(payload["code"], -32010);
         assert!(payload.get("reason_code").is_none());
         assert!(payload.get("retryable").is_none());
-    }
-
-    #[test]
-    fn cancellation_revokes_all_tickets_collected_for_the_request() {
-        let mut permissions = PermissionEngine::new().unwrap();
-        let mut ticket_ids = Vec::new();
-        for capability in [
-            crate::permission::Capability::ProcessExecute,
-            crate::permission::Capability::GitLocalWrite,
-            crate::permission::Capability::NetworkOutbound,
-        ] {
-            let ticket = permissions
-                .request_action(
-                    &crate::permission::ExecAuthorization {
-                        capability,
-                        argv: vec!["sh".into()],
-                        cwd: None,
-                        background: false,
-                        network: crate::sandbox::NetworkPolicy::Deny,
-                        expected_head: None,
-                        stdin: Some("git add file".into()),
-                        protected_read: false,
-                    },
-                    "test approval".into(),
-                    "test".into(),
-                )
-                .unwrap();
-            ticket_ids.push(ticket.id);
-        }
-        let request = Request {
-            jsonrpc: "2.0".into(),
-            id: Some(json!(12)),
-            method: "tools/call".into(),
-            params: json!({"arguments": {
-                "approval_id": ticket_ids[0],
-                "git_approval_id": ticket_ids[1]
-            }}),
-        };
-
-        revoke_request_approvals(&mut permissions, &request, &ticket_ids[2]);
-
-        for ticket_id in ticket_ids {
-            assert!(permissions.deny(&ticket_id).is_err());
-        }
-    }
-
-    #[test]
-    fn cancelled_approval_wait_suppresses_call_response_and_resumes_stdio() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
-        let requests = [
-            json!({
-                "jsonrpc":"2.0", "id":1, "method":"initialize",
-                "params":{"capabilities":{"elicitation":{}}}
-            }),
-            json!({
-                "jsonrpc":"2.0", "id":2, "method":"tools/call",
-                "params":{"name":"exec", "arguments":{"script":"printf cancelled"}}
-            }),
-            json!({
-                "jsonrpc":"2.0", "method":"notifications/cancelled",
-                "params":{"requestId":2, "reason":"user cancelled"}
-            }),
-            json!({"jsonrpc":"2.0", "id":3, "method":"tools/list"}),
-        ];
-        let input = requests
-            .iter()
-            .map(Value::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut input = Cursor::new(format!("{input}\n"));
-        let mut output = Vec::new();
-
-        serve(&workspace, &mut input, &mut output).unwrap();
-
-        let responses = String::from_utf8(output)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(responses.len(), 3);
-        assert_eq!(responses[0]["id"], 1);
-        assert_eq!(responses[1]["method"], "elicitation/create");
-        assert_eq!(responses[2]["id"], 3);
-        assert!(responses.iter().all(|response| response["id"] != 2));
-    }
-
-    #[test]
-    fn declined_approval_returns_a_denied_tool_result() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(dir.path()).unwrap();
-        let requests = [
-            json!({
-                "jsonrpc":"2.0", "id":1, "method":"initialize",
-                "params":{"capabilities":{"elicitation":{}}}
-            }),
-            json!({
-                "jsonrpc":"2.0", "id":2, "method":"tools/call",
-                "params":{"name":"exec", "arguments":{"script":"printf declined"}}
-            }),
-            json!({
-                "jsonrpc":"2.0", "id":"web_harness_elicitation_1",
-                "result":{"action":"decline"}
-            }),
-        ];
-        let input = requests
-            .iter()
-            .map(Value::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut input = Cursor::new(format!("{input}\n"));
-        let mut output = Vec::new();
-
-        serve(&workspace, &mut input, &mut output).unwrap();
-
-        let responses = String::from_utf8(output)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(responses.len(), 3);
-        assert_eq!(responses[2]["id"], 2);
-        assert_eq!(
-            responses[2]["result"]["structuredContent"]["status"],
-            "denied"
-        );
-        assert_eq!(responses[2]["result"]["isError"], true);
     }
 }
