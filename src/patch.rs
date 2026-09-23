@@ -12,6 +12,8 @@ pub enum PatchError {
     Conflict(String),
     #[error("patch target exceeds the bounded update limit: {0}")]
     Limit(String),
+    #[error("patch target is not valid UTF-8: {0}")]
+    InvalidEncoding(String),
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
     #[error(transparent)]
@@ -99,17 +101,22 @@ pub fn apply_with_revisions(
                         return Err(PatchError::Conflict(path));
                     }
                 }
-                if fs::metadata(&target)?.len() > MAX_PATCH_TARGET_BYTES {
-                    cleanup_dirs(&created_dirs);
-                    return Err(PatchError::Limit(path));
-                }
-                let mut content = match fs::read_to_string(&target) {
-                    Ok(content) => content,
-                    Err(error) => {
-                        cleanup_dirs(&created_dirs);
-                        return Err(PatchError::Io(error));
-                    }
-                };
+                let mut content =
+                    match workspace.read_text_bounded(&path, MAX_PATCH_TARGET_BYTES as usize) {
+                        Ok(content) => content,
+                        Err(WorkspaceError::ReadLimit(_)) => {
+                            cleanup_dirs(&created_dirs);
+                            return Err(PatchError::Limit(path));
+                        }
+                        Err(WorkspaceError::InvalidEncoding(path)) => {
+                            cleanup_dirs(&created_dirs);
+                            return Err(PatchError::InvalidEncoding(path.display().to_string()));
+                        }
+                        Err(error) => {
+                            cleanup_dirs(&created_dirs);
+                            return Err(PatchError::Workspace(error));
+                        }
+                    };
                 for hunk in hunks {
                     let Some(index) = content.find(&hunk.old) else {
                         cleanup_dirs(&created_dirs);

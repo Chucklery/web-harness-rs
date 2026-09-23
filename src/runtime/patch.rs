@@ -57,6 +57,7 @@ fn patch_error_kind(error: &patch::PatchError) -> RuntimeErrorKind {
         patch::PatchError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
         patch::PatchError::Conflict(_) => RuntimeErrorKind::Conflict,
         patch::PatchError::Limit(_) => RuntimeErrorKind::LimitExceeded,
+        patch::PatchError::InvalidEncoding(_) => RuntimeErrorKind::InvalidEncoding,
         patch::PatchError::Workspace(crate::workspace::WorkspaceError::Denied(_)) => {
             RuntimeErrorKind::Denied
         }
@@ -172,5 +173,22 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::LimitExceeded);
+    }
+
+    #[test]
+    fn maps_non_utf8_patch_targets_to_invalid_encoding() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("binary.dat"), [0xff, 0xfe]).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let error = PatchRuntime
+            .call(
+                &mut context,
+                &json!({"patch": "*** Begin Patch\n*** Update File: binary.dat\n@@\n-old\n+new\n*** End Patch"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidEncoding);
     }
 }

@@ -17,6 +17,10 @@ pub enum WorkspaceError {
     Denied(PathBuf),
     #[error("invalid boundary entry: {0}")]
     InvalidBoundary(String),
+    #[error("file exceeds read limit: {0}")]
+    ReadLimit(PathBuf),
+    #[error("file is not valid UTF-8: {0}")]
+    InvalidEncoding(PathBuf),
     #[error("failed to access path: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -185,12 +189,16 @@ impl Workspace {
     ) -> Result<String, WorkspaceError> {
         let path = self.resolve(relative)?;
         if fs::metadata(&path)?.len() > max_bytes as u64 {
-            return Err(WorkspaceError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("file exceeds read limit of {max_bytes} bytes"),
-            )));
+            return Err(WorkspaceError::ReadLimit(path));
         }
-        Ok(fs::read_to_string(path)?)
+        let file = fs::File::open(&path)?;
+        let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+        file.take(max_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > max_bytes {
+            return Err(WorkspaceError::ReadLimit(path.clone()));
+        }
+        String::from_utf8(bytes).map_err(|_| WorkspaceError::InvalidEncoding(path))
     }
 
     pub fn read_revision(&self, relative: impl AsRef<Path>) -> Result<String, WorkspaceError> {
@@ -410,6 +418,17 @@ mod tests {
         fs::write(dir.path().join("big.txt"), "1234567890").unwrap();
         let ws = Workspace::new(dir.path()).unwrap();
         assert!(ws.read_text_bounded("big.txt", 4).is_err());
+    }
+
+    #[test]
+    fn classifies_invalid_utf8_separately_from_read_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("binary.dat"), [0xff, 0xfe]).unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        assert!(matches!(
+            ws.read_text_bounded("binary.dat", 16),
+            Err(WorkspaceError::InvalidEncoding(_))
+        ));
     }
 
     #[test]
