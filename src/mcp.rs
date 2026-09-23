@@ -448,6 +448,8 @@ fn handle(
                             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                             "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
                             "revision": {"type": "string", "maxLength": 256},
+                            "start_line": {"type": "integer", "minimum": 1, "maximum": 1000000},
+                            "max_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
                             "message": {"type": "string", "minLength": 1, "maxLength": 4096},
                             "branch": {"type": "string", "minLength": 1, "maxLength": 256},
                             "remote": {"type": "string", "minLength": 1, "maxLength": 256},

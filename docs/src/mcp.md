@@ -111,7 +111,7 @@ Every mutation requires a one-time approval bound to the exact generated Git arg
 
 Mutation calls may provide `expected_head`; after approval and immediately before execution, the current HEAD must still match or the operation returns a conflict.
 
-`diff` accepts optional `offset` and `limit` arguments to return bounded file/hunk chunks with a parser-ready `next_offset`; keep the other diff arguments unchanged when continuing. `show_file` reads one workspace-scoped path from a validated revision. Commit accepts an optional pathspec list so existing staged changes outside that list are not included. Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
+`diff` accepts optional `offset` and `limit` arguments to return bounded file/hunk chunks with a parser-ready `next_offset`; keep the other diff arguments unchanged when continuing. `show_file` reads one workspace-scoped path from a validated revision in bounded line pages (`start_line`, up to 256 KiB), and returns `next_start_line` when another page is available. Each call captures at most 8 MiB from the Git blob; a source larger than that is marked `source_truncated` without an unsafe continuation. Commit accepts an optional pathspec list so existing staged changes outside that list are not included. Commit messages, refs, remotes, refspecs, and pathspec counts are bounded. Arbitrary Git argv is not exposed.
 
 ## Errors
 

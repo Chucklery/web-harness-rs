@@ -154,6 +154,42 @@ impl RuntimeTool for GitRuntime {
         }
 
         let workspace = context.workspace();
+        if action == "show_file" {
+            let path = pathspec.first().ok_or_else(|| {
+                RuntimeToolError::new(
+                    RuntimeErrorKind::InvalidArguments,
+                    "show_file requires exactly one pathspec",
+                )
+            })?;
+            if pathspec.len() != 1 {
+                return Err(RuntimeToolError::new(
+                    RuntimeErrorKind::InvalidArguments,
+                    "show_file requires exactly one pathspec",
+                ));
+            }
+            let start_line =
+                bounded_argument(arguments.get("start_line"), 1, 1_000_000, "start_line")?;
+            let max_bytes = bounded_argument(
+                arguments.get("max_bytes"),
+                256 * 1024,
+                256 * 1024,
+                "max_bytes",
+            )?;
+            let page = git::show_file_page(
+                workspace,
+                arguments
+                    .get("revision")
+                    .and_then(Value::as_str)
+                    .unwrap_or("HEAD"),
+                path,
+                start_line,
+                max_bytes,
+            )
+            .map_err(git_error)?;
+            return serde_json::to_value(page).map_err(|error| {
+                RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string())
+            });
+        }
         let result = match action {
             "status" => git::status(workspace),
             "diff" => {
@@ -186,28 +222,6 @@ impl RuntimeTool for GitRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("HEAD"),
             ),
-            "show_file" => {
-                let path = pathspec.first().ok_or_else(|| {
-                    RuntimeToolError::new(
-                        RuntimeErrorKind::InvalidArguments,
-                        "show_file requires exactly one pathspec",
-                    )
-                })?;
-                if pathspec.len() != 1 {
-                    return Err(RuntimeToolError::new(
-                        RuntimeErrorKind::InvalidArguments,
-                        "show_file requires exactly one pathspec",
-                    ));
-                }
-                git::show_file(
-                    workspace,
-                    arguments
-                        .get("revision")
-                        .and_then(Value::as_str)
-                        .unwrap_or("HEAD"),
-                    path,
-                )
-            }
             "add" => git::add(workspace, &pathspec),
             "commit" => git::commit(workspace, message.unwrap_or_default(), &pathspec),
             "switch" => git::switch(workspace, branch.unwrap_or_default()),
@@ -271,9 +285,34 @@ fn validate_expected_head(value: &str) -> Result<String, RuntimeToolError> {
     Ok(value.to_string())
 }
 
+fn bounded_argument(
+    value: Option<&Value>,
+    default: usize,
+    maximum: usize,
+    name: &str,
+) -> Result<usize, RuntimeToolError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let parsed = value.as_u64().ok_or_else(|| {
+        RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            format!("{name} must be an unsigned integer"),
+        )
+    })? as usize;
+    if parsed == 0 || parsed > maximum {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::InvalidArguments,
+            format!("{name} must be 1..={maximum}"),
+        ));
+    }
+    Ok(parsed)
+}
+
 fn git_error(error: GitError) -> RuntimeToolError {
     let kind = match &error {
         GitError::Invalid(_) => RuntimeErrorKind::InvalidArguments,
+        GitError::Limit(_) => RuntimeErrorKind::LimitExceeded,
         GitError::Workspace(crate::workspace::WorkspaceError::Denied(_)) => {
             RuntimeErrorKind::Denied
         }
@@ -321,6 +360,33 @@ mod tests {
     fn missing_git_is_reported_as_a_dependency_problem() {
         let error = git_error(GitError::Unavailable);
         assert_eq!(error.kind(), RuntimeErrorKind::Dependency);
+    }
+
+    #[test]
+    fn maps_git_file_capture_limit_to_limit_error() {
+        let error = git_error(GitError::Limit("blob too large".into()));
+        assert_eq!(error.kind(), RuntimeErrorKind::LimitExceeded);
+    }
+
+    #[test]
+    fn show_file_paging_arguments_are_bounded() {
+        assert_eq!(bounded_argument(None, 1, 100, "start_line").unwrap(), 1);
+        assert_eq!(
+            bounded_argument(Some(&json!(100)), 1, 100, "start_line").unwrap(),
+            100
+        );
+        assert_eq!(
+            bounded_argument(Some(&json!(0)), 1, 100, "start_line")
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidArguments
+        );
+        assert_eq!(
+            bounded_argument(Some(&json!(101)), 1, 100, "start_line")
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidArguments
+        );
     }
 
     #[test]

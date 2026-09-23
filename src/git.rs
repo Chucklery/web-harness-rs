@@ -7,6 +7,9 @@ use std::process::{Command, Stdio};
 use thiserror::Error;
 
 const MAX_OUTPUT: usize = 512 * 1024;
+const MAX_FILE_CAPTURE: usize = 8 * 1024 * 1024;
+const MAX_FILE_PAGE: usize = 256 * 1024;
+const MAX_FILE_START_LINE: usize = 1_000_000;
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -14,6 +17,8 @@ pub enum GitError {
     Unavailable,
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
+    #[error("git result limit exceeded: {0}")]
+    Limit(String),
     #[error("git command failed: {0}")]
     Failed(String),
     #[error("invalid git request: {0}")]
@@ -25,6 +30,8 @@ pub struct GitResult {
     pub stdout: String,
     pub stderr: String,
     pub truncated: bool,
+    #[serde(skip)]
+    stdout_truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,6 +40,18 @@ pub struct GitDiffPage {
     pub offset: usize,
     pub next_offset: Option<usize>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GitFilePage {
+    pub revision: String,
+    pub path: String,
+    pub text: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub next_start_line: Option<usize>,
+    pub truncated: bool,
+    pub source_truncated: bool,
 }
 
 pub fn status(workspace: &Workspace) -> Result<GitResult, GitError> {
@@ -104,12 +123,68 @@ pub fn show(workspace: &Workspace, revision: &str) -> Result<GitResult, GitError
     )
 }
 
-pub fn show_file(workspace: &Workspace, revision: &str, path: &str) -> Result<GitResult, GitError> {
+pub fn show_file_page(
+    workspace: &Workspace,
+    revision: &str,
+    path: &str,
+    start_line: usize,
+    max_bytes: usize,
+) -> Result<GitFilePage, GitError> {
     validate_ref_name(revision)?;
+    if !(1..=MAX_FILE_START_LINE).contains(&start_line) {
+        return Err(GitError::Invalid(format!(
+            "start_line must be 1..={MAX_FILE_START_LINE}"
+        )));
+    }
+    if !(1..=MAX_FILE_PAGE).contains(&max_bytes) {
+        return Err(GitError::Invalid(format!(
+            "max_bytes must be 1..={MAX_FILE_PAGE}"
+        )));
+    }
     workspace
         .resolve_for_write(path)
         .map_err(GitError::Workspace)?;
-    run_owned(workspace, &["show".into(), format!("{revision}:{path}")])
+    let result = run_owned_with_limit(
+        workspace,
+        &["show".into(), format!("{revision}:{path}")],
+        MAX_FILE_CAPTURE,
+    )?;
+    let mut line_number = 0usize;
+    let mut output = String::with_capacity(max_bytes.min(64 * 1024));
+    let mut end_line = start_line.saturating_sub(1);
+    let mut next_start_line = None;
+    for line in result.stdout.split_inclusive('\n') {
+        line_number += 1;
+        if line_number < start_line {
+            continue;
+        }
+        if line.len() > max_bytes {
+            return Err(GitError::Limit(format!(
+                "line {line_number} exceeds the show_file page limit"
+            )));
+        }
+        if output.len().saturating_add(line.len()) > max_bytes {
+            let line_is_complete = line.ends_with('\n') || !result.truncated;
+            if line_is_complete {
+                next_start_line = Some(line_number);
+            }
+            break;
+        }
+        output.push_str(line);
+        end_line = line_number;
+    }
+    let source_truncated = result.stdout_truncated;
+    let truncated = source_truncated || next_start_line.is_some();
+    Ok(GitFilePage {
+        revision: revision.to_string(),
+        path: path.to_string(),
+        text: output,
+        start_line,
+        end_line,
+        next_start_line,
+        truncated,
+        source_truncated,
+    })
 }
 
 pub fn add(workspace: &Workspace, pathspec: &[String]) -> Result<GitResult, GitError> {
@@ -336,11 +411,27 @@ fn validate_ref_name(value: &str) -> Result<(), GitError> {
 }
 
 fn run_owned(workspace: &Workspace, args: &[String]) -> Result<GitResult, GitError> {
+    run_owned_with_limit(workspace, args, MAX_OUTPUT)
+}
+
+fn run_owned_with_limit(
+    workspace: &Workspace,
+    args: &[String],
+    stdout_limit: usize,
+) -> Result<GitResult, GitError> {
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run(workspace, &refs)
+    run_with_stdout_limit(workspace, &refs, stdout_limit)
 }
 
 fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
+    run_with_stdout_limit(workspace, args, MAX_OUTPUT)
+}
+
+fn run_with_stdout_limit(
+    workspace: &Workspace,
+    args: &[&str],
+    stdout_limit: usize,
+) -> Result<GitResult, GitError> {
     let mut command = Command::new("git");
     command
         .args(args)
@@ -355,7 +446,7 @@ fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
             GitError::Failed(error.to_string())
         }
     })?;
-    let output = command_output::collect(child, MAX_OUTPUT, 64 * 1024)
+    let output = command_output::collect(child, stdout_limit, 64 * 1024)
         .map_err(|error| GitError::Failed(error.to_string()))?;
     if !output.status.success() {
         return Err(GitError::Failed(redact::text(
@@ -363,12 +454,18 @@ fn run(workspace: &Workspace, args: &[&str]) -> Result<GitResult, GitError> {
         )));
     }
     let bytes = output.stdout;
-    let truncated = output.stdout_truncated || output.stderr_truncated;
+    let stdout_truncated = output.stdout_truncated;
+    let truncated = stdout_truncated || output.stderr_truncated;
     let stderr = output.stderr;
+    let mut stdout = redact::text(&String::from_utf8_lossy(&bytes));
+    if !output.stdout_truncated && bytes.ends_with(b"\n") && !stdout.ends_with('\n') {
+        stdout.push('\n');
+    }
     Ok(GitResult {
-        stdout: redact::text(&String::from_utf8_lossy(&bytes)),
+        stdout,
         stderr: redact::text(&String::from_utf8_lossy(&stderr)),
         truncated,
+        stdout_truncated,
     })
 }
 
@@ -415,6 +512,49 @@ mod tests {
         add(&workspace, &["a.txt".into()]).unwrap();
         commit(&workspace, "test commit", &[]).unwrap();
         assert!(log(&workspace, 1).unwrap().stdout.contains("test commit"));
+    }
+
+    #[test]
+    fn show_file_page_returns_parser_ready_line_continuations() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        let expected = (1..=100)
+            .map(|line| format!("line-{line:03}\n"))
+            .collect::<String>();
+        fs::write(dir.path().join("history.txt"), &expected).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        add(&workspace, &["history.txt".into()]).unwrap();
+        commit(&workspace, "file history", &[]).unwrap();
+
+        let mut combined = String::new();
+        let mut start_line = 1;
+        loop {
+            let page = show_file_page(&workspace, "HEAD", "history.txt", start_line, 64).unwrap();
+            assert!(page.text.len() <= 64);
+            combined.push_str(&page.text);
+            if let Some(next) = page.next_start_line {
+                assert!(next > start_line);
+                start_line = next;
+            } else {
+                assert!(!page.truncated);
+                break;
+            }
+        }
+        assert_eq!(combined, expected);
     }
 
     #[test]
