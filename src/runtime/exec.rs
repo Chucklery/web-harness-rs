@@ -432,14 +432,35 @@ mod tests {
         let mut context =
             ExecutionContext::with_unavailable_sandbox(&workspace, &mut jobs, &mut permissions);
 
-        for argv in [vec!["printf", "one"], vec!["printf", "two"]] {
-            let result = ExecRuntime
-                .call(&mut context, &json!({"argv": argv}))
-                .unwrap();
-            assert_eq!(result["status"], "approval_required");
-            assert_eq!(result["capability"], "process.execute");
-            assert_eq!(result["approval_argument"], "approval_id");
-        }
+        let first_request = json!({"argv": ["printf", "one"]});
+        let first_approval = ExecRuntime.call(&mut context, &first_request).unwrap();
+        assert_eq!(first_approval["status"], "approval_required");
+        assert_eq!(first_approval["capability"], "process.execute");
+        assert_eq!(first_approval["approval_argument"], "approval_id");
+        let first_ticket = first_approval["approval"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let second_request = json!({"argv": ["printf", "two"]});
+        let second_approval = ExecRuntime.call(&mut context, &second_request).unwrap();
+        assert_eq!(second_approval["status"], "approval_required");
+        assert_eq!(second_approval["capability"], "process.execute");
+        let second_ticket = second_approval["approval"]["id"].as_str().unwrap();
+        assert_ne!(first_ticket, second_ticket);
+
+        context.permissions().approve(&first_ticket).unwrap();
+        let mut approved_retry = first_request.as_object().unwrap().clone();
+        approved_retry.insert("approval_id".into(), json!(first_ticket));
+        let executed = ExecRuntime
+            .call(&mut context, &Value::Object(approved_retry))
+            .unwrap();
+        assert_eq!(executed["exit_code"], 0);
+
+        // Approval for one exact argv does not authorize another invocation.
+        let second_after_first_approval = ExecRuntime.call(&mut context, &second_request).unwrap();
+        assert_eq!(second_after_first_approval["status"], "approval_required");
+        assert_eq!(second_after_first_approval["capability"], "process.execute");
     }
 
     #[test]
