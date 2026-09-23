@@ -53,7 +53,7 @@ Exec 还提供明确的 `script` 模式：Unix 使用 `sh`/`bash`，Windows 使�
 
 macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区、TMPDIR、`/tmp`、`/private/tmp` 与 `/dev/null`。`/dev/null` 需要显式放行：shell、Git 以及大多数编译器与构建工具链都会无条件打开它，否则 `git status` 这类命令会直接以 `Operation not permitted` 失败。
 
-网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并且必须使用绑定确切 argv、cwd、后台模式、capability 和网络策略的一次性审批。没有原生 sandbox backend 时会拒绝该升级，不提供 unsandboxed 网络模式。
+网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并始终要求单独的 `network.outbound` 一次性审批，票据绑定确切 argv、cwd、后台模式和网络策略。如果同一命令还需要进程或 Git 审批，每种 capability 都有独立票据并由 Host 分别确认；网络票据通过 `network_approval_id` 传回，不能授权 Git mutation，Git 票据也不能授权网络访问。没有原生 sandbox backend 时会拒绝网络升级，不提供 unsandboxed 网络模式。
 
 ## patch
 

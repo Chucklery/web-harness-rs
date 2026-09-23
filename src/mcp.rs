@@ -99,7 +99,8 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
             &mut permissions,
             &runtime,
         );
-        if session.elicitation_supported
+        let mut retry = request.clone();
+        while session.elicitation_supported
             && request.method == "tools/call"
             && is_approval_required(&response)
         {
@@ -112,24 +113,40 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
             {
+                let approval_argument = response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.get("structuredContent"))
+                    .and_then(|value| value.get("approval_argument"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("approval_id")
+                    .to_string();
                 match request_host_approval(&mut stdin, &mut stdout, &mut session, &response)? {
                     Some(true) => {
                         permissions.approve(&approval_id)?;
-                        let mut retry = request;
                         let arguments = retry
                             .params
                             .get_mut("arguments")
                             .and_then(Value::as_object_mut)
                             .ok_or("tools/call arguments must be an object")?;
-                        arguments.insert("approval_id".into(), Value::String(approval_id));
-                        response = handle(retry, &workspace, &mut jobs, &mut permissions, &runtime);
+                        arguments.insert(approval_argument, Value::String(approval_id));
+                        response = handle(
+                            retry.clone(),
+                            &workspace,
+                            &mut jobs,
+                            &mut permissions,
+                            &runtime,
+                        );
                     }
                     Some(false) => {
                         permissions.deny(&approval_id)?;
                         response = denied_response(&response);
+                        break;
                     }
-                    None => {}
+                    None => break,
                 }
+            } else {
+                break;
             }
         }
         serde_json::to_writer(&mut stdout, &response)?;
@@ -396,7 +413,8 @@ fn handle(
                             "stdin": {"type": "string", "maxLength": 65536},
                             "background": {"type": "boolean"},
                             "network": {"type": "string", "enum": ["deny", "outbound"], "default": "deny"},
-                            "approval_id": {"type": "string"}
+                            "approval_id": {"type": "string"},
+                            "network_approval_id": {"type": "string"}
                         },
                         "oneOf": [{"required": ["argv"]}, {"required": ["script"]}],
                         "additionalProperties": false

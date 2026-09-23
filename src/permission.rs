@@ -159,6 +159,29 @@ impl PermissionEngine {
         id: &str,
         request: &ExecAuthorization,
     ) -> Result<(), PermissionError> {
+        self.validate_exec(id, request)?;
+        self.tickets.remove(id);
+        Ok(())
+    }
+
+    pub fn consume_execs(
+        &mut self,
+        requests: &[(String, ExecAuthorization)],
+    ) -> Result<(), PermissionError> {
+        for (id, request) in requests {
+            self.validate_exec(id, request)?;
+        }
+        for (id, _) in requests {
+            self.tickets.remove(id);
+        }
+        Ok(())
+    }
+
+    pub fn validate_exec(
+        &mut self,
+        id: &str,
+        request: &ExecAuthorization,
+    ) -> Result<(), PermissionError> {
         self.cleanup();
         let ticket = self.tickets.get(id).ok_or(PermissionError::NotFound)?;
         if ticket.expires <= Instant::now() {
@@ -171,7 +194,6 @@ impl PermissionEngine {
         if ticket.digest != self.digest(request) {
             return Err(PermissionError::Mismatch);
         }
-        self.tickets.remove(id);
         Ok(())
     }
 
@@ -328,6 +350,28 @@ mod tests {
             engine.consume_exec(&ticket.id, &request),
             Err(PermissionError::NotFound)
         ));
+    }
+
+    #[test]
+    fn multi_capability_consumption_is_atomic() {
+        let mut engine = PermissionEngine::new().unwrap();
+        let mut git_request = request(&["git", "push"]);
+        git_request.capability = Capability::GitRemoteWrite;
+        git_request.network = NetworkPolicy::Outbound;
+        let mut network_request = git_request.clone();
+        network_request.capability = Capability::NetworkOutbound;
+        let git_ticket = request_ticket(&mut engine, &git_request);
+        let network_ticket = request_ticket(&mut engine, &network_request);
+        engine.approve(&git_ticket.id).unwrap();
+
+        assert!(matches!(
+            engine.consume_execs(&[
+                (git_ticket.id.clone(), git_request.clone()),
+                (network_ticket.id.clone(), network_request.clone())
+            ]),
+            Err(PermissionError::NotApproved)
+        ));
+        engine.consume_exec(&git_ticket.id, &git_request).unwrap();
     }
 
     #[test]

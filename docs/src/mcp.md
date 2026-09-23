@@ -69,7 +69,7 @@ Direct Git commands sent through exec are classified before spawn and use the sa
 
 On macOS, native Seatbelt is used when available. On systems without a native sandbox backend, execution requires an explicit one-time approval.
 
-Network policy is per execution and defaults to `deny`. `outbound` adds only Seatbelt's outbound-network permission and always requires a one-time approval bound to the exact argv, cwd, background mode, capability, and network policy. The upgrade is rejected when no native sandbox backend can enforce it; there is no unsandboxed network mode.
+Network policy is per execution and defaults to `deny`. `outbound` adds only Seatbelt's outbound-network permission and always requires a separate one-time `network.outbound` approval bound to the exact argv, cwd, background mode, and network policy. If the same command also needs process or Git approval, each capability has its own ticket and Host confirmation; the network ticket is passed as `network_approval_id` and cannot authorize a Git mutation, while the Git ticket cannot authorize network access. The upgrade is rejected when no native sandbox backend can enforce it; there is no unsandboxed network mode.
 
 The macOS profile allows writes only inside the workspace, TMPDIR, `/tmp`, `/private/tmp`, and `/dev/null`. `/dev/null` is granted explicitly because shells, Git, and most compiler and build toolchains open it unconditionally; without it `git status` and similar commands fail with `Operation not permitted`.
 

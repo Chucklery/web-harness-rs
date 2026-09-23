@@ -125,17 +125,17 @@ impl RuntimeTool for ExecRuntime {
             ));
         }
 
-        let capability = match (command_policy::command_risk(&argv), network) {
-            (Some(CommandRisk::GitLocalWrite), _) => Capability::GitLocalWrite,
-            (Some(CommandRisk::GitRemoteWrite), _) => Capability::GitRemoteWrite,
-            (None, NetworkPolicy::Outbound) => Capability::NetworkOutbound,
-            (None, NetworkPolicy::Deny) => Capability::ProcessExecute,
+        let command_capability = match command_policy::command_risk(&argv) {
+            Some(CommandRisk::GitLocalWrite) => Some(Capability::GitLocalWrite),
+            Some(CommandRisk::GitRemoteWrite) => Some(Capability::GitRemoteWrite),
+            None if script.is_some() || !sandbox.enforced() => Some(Capability::ProcessExecute),
+            None => None,
         };
         let protected_read = argv.iter().skip(1).any(|argument| {
             path_policy::is_protected(argument) && context.workspace().resolve(argument).is_ok()
         });
         let authorization = ExecAuthorization {
-            capability,
+            capability: command_capability.unwrap_or(Capability::ProcessExecute),
             argv: argv.clone(),
             cwd: cwd.map(ToOwned::to_owned),
             background,
@@ -145,19 +145,21 @@ impl RuntimeTool for ExecRuntime {
             protected_read,
         };
         let script_mode = script.is_some();
-        if capability.requires_approval()
-            && (script_mode
-                || protected_read
-                || capability != Capability::ProcessExecute
-                || !sandbox.enforced())
-        {
+        let needs_command_approval =
+            command_capability.is_some() || protected_read || script_mode || !sandbox.enforced();
+        let mut approvals = Vec::with_capacity(2);
+        if needs_command_approval {
+            let capability = command_capability.unwrap_or(Capability::ProcessExecute);
+            let mut command_authorization = authorization.clone();
+            command_authorization.capability = capability;
             if let Some(approval_id) = arguments.get("approval_id").and_then(Value::as_str) {
                 context
                     .permissions()
-                    .consume_exec(approval_id, &authorization)
+                    .validate_exec(approval_id, &command_authorization)
                     .map_err(|error| {
                         RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
                     })?;
+                approvals.push((approval_id.to_string(), command_authorization));
             } else {
                 let (summary, reason) = match capability {
                     Capability::GitLocalWrite => (
@@ -168,10 +170,6 @@ impl RuntimeTool for ExecRuntime {
                         "Run Git push through exec".to_string(),
                         "Direct Git push may change a remote repository and requires explicit one-time approval".to_string(),
                     ),
-                    Capability::NetworkOutbound => (
-                        format!("Run {} with outbound network", argv.first().map(String::as_str).unwrap_or("?")),
-                        "Outbound network is denied by default and requires explicit one-time approval".to_string(),
-                    ),
                     Capability::ProcessExecute if script_mode => (
                         "Run an approved workspace script".to_string(),
                         "Script execution requires explicit one-time approval".to_string(),
@@ -180,21 +178,57 @@ impl RuntimeTool for ExecRuntime {
                         "Read a protected workspace path through exec".to_string(),
                         "Protected paths require explicit one-time approval".to_string(),
                     ),
-                    _ => (
+                    Capability::ProcessExecute => (
                         format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
                         "OS sandbox enforcement is not enabled; explicit approval is required".to_string(),
                     ),
+                    _ => unreachable!("only command capabilities are handled here"),
                 };
-                let approval =
-                    context
-                        .permissions()
-                        .request_action(&authorization, summary, reason);
-                return Ok(json!({
-                    "status": "approval_required",
-                    "approval": approval,
-                    "capability": capability.as_str()
-                }));
+                return Ok(request_approval(
+                    context,
+                    &command_authorization,
+                    "approval_id",
+                    capability,
+                    summary,
+                    reason,
+                ));
             }
+        }
+
+        if network == NetworkPolicy::Outbound {
+            let mut network_authorization = authorization.clone();
+            network_authorization.capability = Capability::NetworkOutbound;
+            if let Some(approval_id) = arguments.get("network_approval_id").and_then(Value::as_str)
+            {
+                context
+                    .permissions()
+                    .validate_exec(approval_id, &network_authorization)
+                    .map_err(|error| {
+                        RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+                    })?;
+                approvals.push((approval_id.to_string(), network_authorization));
+            } else {
+                return Ok(request_approval(
+                    context,
+                    &network_authorization,
+                    "network_approval_id",
+                    Capability::NetworkOutbound,
+                    format!(
+                        "Run {} with outbound network",
+                        argv.first().map(String::as_str).unwrap_or("?")
+                    ),
+                    "Outbound network is denied by default and requires explicit one-time approval"
+                        .to_string(),
+                ));
+            }
+        }
+        if !approvals.is_empty() {
+            context
+                .permissions()
+                .consume_execs(&approvals)
+                .map_err(|error| {
+                    RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+                })?;
         }
 
         let workspace = context.workspace().clone();
@@ -234,6 +268,25 @@ impl RuntimeTool for ExecRuntime {
 
         Ok(value)
     }
+}
+
+fn request_approval(
+    context: &mut ExecutionContext<'_>,
+    authorization: &ExecAuthorization,
+    argument_name: &str,
+    capability: Capability,
+    summary: String,
+    reason: String,
+) -> Value {
+    let approval = context
+        .permissions()
+        .request_action(authorization, summary, reason);
+    json!({
+        "status": "approval_required",
+        "approval": approval,
+        "capability": capability.as_str(),
+        "approval_argument": argument_name
+    })
 }
 
 fn validate_script_shell(shell: &str) -> Result<(), RuntimeToolError> {
@@ -291,6 +344,44 @@ mod tests {
             .unwrap();
         assert_eq!(remote["status"], "approval_required");
         assert_eq!(remote["capability"], "git.remote.write");
+    }
+
+    #[test]
+    fn git_push_with_outbound_network_requires_two_approvals() {
+        if !crate::sandbox::can_upgrade_network() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let request = json!({"argv":["git","push"],"network":"outbound"});
+
+        let git_approval = ExecRuntime.call(&mut context, &request).unwrap();
+        assert_eq!(git_approval["capability"], "git.remote.write");
+        assert_eq!(git_approval["approval_argument"], "approval_id");
+        let git_ticket = git_approval["approval"]["id"].as_str().unwrap().to_string();
+        context.permissions().approve(&git_ticket).unwrap();
+
+        let mut retry = request.as_object().unwrap().clone();
+        retry.insert("approval_id".into(), json!(git_ticket));
+        let retry = Value::Object(retry);
+        let network_approval = ExecRuntime.call(&mut context, &retry).unwrap();
+        assert_eq!(network_approval["capability"], "network.outbound");
+        assert_eq!(network_approval["approval_argument"], "network_approval_id");
+        let network_ticket = network_approval["approval"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        context.permissions().approve(&network_ticket).unwrap();
+
+        let mut retry = retry.as_object().unwrap().clone();
+        retry.insert("network_approval_id".into(), json!(network_ticket));
+        let result = ExecRuntime
+            .call(&mut context, &Value::Object(retry))
+            .unwrap();
+        assert_eq!(result["exit_code"], 128);
     }
 
     #[test]

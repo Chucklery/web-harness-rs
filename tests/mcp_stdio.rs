@@ -312,6 +312,98 @@ fn stdio_mcp_rejects_search_query_and_queries_together() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
+fn git_push_outbound_requires_both_host_approvals_before_spawn() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{"capabilities":{"elicitation":{"form":{}}}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let _: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{"name":"exec","arguments":{"argv":["git","push"],"network":"outbound"}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let git_approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(git_approval["method"], "elicitation/create");
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":git_approval["id"],
+            "result":{"action":"accept","content":{"approved":true}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let network_approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(network_approval["method"], "elicitation/create");
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":network_approval["id"],
+            "result":{"action":"accept","content":{"approved":true}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let result: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(result["id"], 2);
+    assert!(result.get("error").is_none());
+    assert_eq!(result["result"]["structuredContent"]["exit_code"], 128);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
 fn git_mutation_requires_and_consumes_approval() {
     let binary = env!("CARGO_BIN_EXE_web-harness");
     let dir = tempfile::tempdir().unwrap();
