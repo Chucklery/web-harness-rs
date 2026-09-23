@@ -387,6 +387,12 @@ mod tests {
             .unwrap();
         assert_eq!(remote["status"], "approval_required");
         assert_eq!(remote["capability"], "git.remote.write");
+
+        let alias = ExecRuntime
+            .call(&mut context, &json!({"argv": ["git", "deploy"]}))
+            .unwrap();
+        assert_eq!(alias["status"], "approval_required");
+        assert_eq!(alias["capability"], "git.remote.write");
     }
 
     #[test]

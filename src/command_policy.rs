@@ -74,14 +74,109 @@ pub fn command_risk(argv: &[String]) -> Option<CommandRisk> {
         return None;
     }
 
-    if git_subcommand(argv) == Some("push") {
-        Some(CommandRisk::GitRemoteWrite)
-    } else {
-        // Even nominally read-only Git commands accept options and aliases
-        // with side effects. Conservatively bind every other direct Git call
-        // to local-repository write approval.
-        Some(CommandRisk::GitLocalWrite)
+    match git_subcommand(argv) {
+        Some("push") => Some(CommandRisk::GitRemoteWrite),
+        Some(subcommand) if is_git_builtin(subcommand) => {
+            // Even nominally read-only Git commands accept options and config
+            // with side effects, so all recognized built-ins require local
+            // repository approval.
+            Some(CommandRisk::GitLocalWrite)
+        }
+        // An unknown subcommand may be a configured `!` alias that executes
+        // arbitrary commands (including `git push`). Require the stronger
+        // capability because static argv inspection cannot resolve Git config.
+        _ => Some(CommandRisk::GitRemoteWrite),
     }
+}
+
+fn is_git_builtin(subcommand: &str) -> bool {
+    const BUILTINS: &[&str] = &[
+        "add",
+        "am",
+        "annotate",
+        "apply",
+        "archive",
+        "bisect",
+        "blame",
+        "branch",
+        "bundle",
+        "cat-file",
+        "check-attr",
+        "check-ignore",
+        "check-mailmap",
+        "check-ref-format",
+        "checkout",
+        "cherry",
+        "cherry-pick",
+        "citool",
+        "clean",
+        "clone",
+        "commit",
+        "config",
+        "count-objects",
+        "credential",
+        "describe",
+        "diff",
+        "difftool",
+        "fast-export",
+        "fetch",
+        "filter-branch",
+        "for-each-ref",
+        "format-patch",
+        "fsck",
+        "gc",
+        "get-tar-commit-id",
+        "grep",
+        "gui",
+        "hash-object",
+        "help",
+        "init",
+        "instaweb",
+        "log",
+        "maintenance",
+        "merge",
+        "mergetool",
+        "mktag",
+        "mktree",
+        "mv",
+        "name-rev",
+        "notes",
+        "pack-objects",
+        "pack-redundant",
+        "pack-refs",
+        "patch-id",
+        "prune",
+        "pull",
+        "push",
+        "range-diff",
+        "read-tree",
+        "rebase",
+        "reflog",
+        "remote",
+        "repack",
+        "replace",
+        "request-pull",
+        "rerere",
+        "reset",
+        "restore",
+        "rev-list",
+        "rev-parse",
+        "rm",
+        "scalar",
+        "send-pack",
+        "shortlog",
+        "show",
+        "show-branch",
+        "sparse-checkout",
+        "stash",
+        "status",
+        "submodule",
+        "switch",
+        "tag",
+        "worktree",
+        "write-tree",
+    ];
+    BUILTINS.contains(&subcommand)
 }
 
 /// Conservatively classifies recognizable Git mutation tokens in a one-shot script.
@@ -287,6 +382,19 @@ mod tests {
         );
         assert_eq!(
             command_risk(&["git".into(), "-C".into(), "nested".into(), "push".into()]),
+            Some(CommandRisk::GitRemoteWrite)
+        );
+        assert_eq!(
+            command_risk(&["git".into(), "deploy".into()]),
+            Some(CommandRisk::GitRemoteWrite)
+        );
+        assert_eq!(
+            command_risk(&[
+                "git".into(),
+                "-c".into(),
+                "alias.deploy=!git push".into(),
+                "deploy".into(),
+            ]),
             Some(CommandRisk::GitRemoteWrite)
         );
         assert_eq!(command_risk(&["cargo".into(), "test".into()]), None);

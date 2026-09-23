@@ -34,4 +34,6 @@ Sandbox 状态被拆成三个独立事实，而不是压成一个 bool：当前�
 
 Git 使用独立 Runtime 权限策略，不经过通用 exec sandbox。只读操作（`status`、分页 `diff`、`log`、`show`、revision 范围内的 `show_file`）使用 `git.read`；本地修改（`add`、`commit`、`switch`、`create_branch`、`restore`）使用 `git.local.write`；`push` 使用 `git.remote.write`。本地写与远端写都绑定各自精确命令并要求一次性审批；mutation 还可通过 `expected_head` 防止审批期间分支变化，commit pathspec 防止混入无关暂存内容。
 
+通过 `exec` 运行的直接 Git 命令也使用同一 capability 检查：`push` 要求 `git.remote.write`，已知内建子命令要求 `git.local.write`，未知子命令要求远端 capability，因为 Git 可能将其解析为配置的 shell alias。该分类是审批防护，不替代 OS sandbox。
+
 Runtime Status 与 Tool Manifest 分别从 `ExecutionContext` 和 `RuntimeRegistry` 动态生成，不再在 MCP 层维护重复常量。MCP 模块只保留 JSON-RPC/MCP 封装、4 个 adaptive 兼容控制调用以及传输层错误码映射。

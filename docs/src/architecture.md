@@ -65,6 +65,8 @@ Landlock is a plausible no-daemon Linux filesystem restriction and requires no e
 
 Git has its own runtime policy and never routes through the generic exec sandbox. Read-only operations (`status`, paged `diff`, `log`, `show`, and revision-scoped `show_file`) use `git.read`; local mutations (`add`, `commit`, `switch`, `create_branch`, `restore`) use `git.local.write`; `push` uses `git.remote.write`. Local and remote mutations require distinct one-time approval-bound command payloads. Mutation approvals may also fence the repository with `expected_head`, and commit pathspecs prevent unrelated staged changes from being included.
 
+Direct Git commands through `exec` share the Git capability checks: `push` requires `git.remote.write`, known built-ins require `git.local.write`, and unknown subcommands require the remote capability because Git may resolve them as configured shell aliases. This classification is an approval guard, not a substitute for the OS sandbox.
+
 Runtime status and tool manifest are derived from `ExecutionContext` and `RuntimeRegistry` rather than duplicate MCP constants. The MCP module is therefore limited to JSON-RPC/MCP envelopes, the four adaptive compatibility control calls, and transport-specific error-code mapping.
 
 ## Why a small local surface
