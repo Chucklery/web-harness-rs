@@ -61,6 +61,6 @@ Status: approval-bound execution is implemented and structured workspace patches
 - sandbox hardening
 - performance hardening
 
-Status: release bundles now include the pinned official OpenAI tunnel-client runtime, and the tunnel acceptance/benchmark harnesses exist. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending.
+Status: this stage is not complete. Release bundles include the pinned official OpenAI tunnel-client runtime, and local tunnel acceptance/benchmark harnesses exist, but real ChatGPT Secure MCP Tunnel end-to-end acceptance is not yet verified. Secret redaction and child environment minimization are implemented. One physical 8 GiB Intel Mac release-mode snapshot is checked in; Apple Silicon 8 GiB and Tunnel + Host RSS evidence remain pending. Native sandboxing is implemented only for macOS Seatbelt; Linux Landlock evaluation and native Linux/Windows sandbox implementations are not complete. Broader performance hardening is not complete.
 
-UI and LSP remain optional and should only be added if real usage metrics justify them.
+UI and LSP are not implemented and remain optional; add them only if real usage metrics justify them.
