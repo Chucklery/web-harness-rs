@@ -57,6 +57,8 @@ impl AcceptanceStage {
 pub struct ToolCallEvidence {
     pub sequence: u16,
     pub tool: ToolName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<ToolAction>,
     pub outcome: ToolOutcome,
     pub error_code: Option<ToolErrorCode>,
 }
@@ -68,7 +70,6 @@ pub enum ToolName {
     WorkOnProject,
     ToolManifest,
     CallRuntimeTool,
-    Permission,
     WorkspaceInfo,
     ListFiles,
     WorkspaceInstructions,
@@ -76,23 +77,30 @@ pub enum ToolName {
     Search,
     Patch,
     Exec,
-    JobPoll,
-    JobWait,
-    JobOutput,
-    JobList,
-    JobCancel,
-    GitHead,
-    GitStatus,
-    GitDiff,
-    GitLog,
-    GitShow,
-    GitShowFile,
-    GitAdd,
-    GitCommit,
-    GitSwitch,
-    GitCreateBranch,
-    GitRestore,
-    GitPush,
+    Job,
+    Git,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolAction {
+    Poll,
+    Wait,
+    Output,
+    List,
+    Cancel,
+    Head,
+    Status,
+    Diff,
+    Log,
+    Show,
+    ShowFile,
+    Add,
+    Commit,
+    Switch,
+    CreateBranch,
+    Restore,
+    Push,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,7 +147,7 @@ impl AcceptanceEvidence {
     }
 
     fn validate(&self) -> Result<(), &'static str> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err("unsupported acceptance evidence schema_version");
         }
         if !valid_version(&self.client_version) || !valid_version(&self.protocol_version) {
@@ -179,20 +187,53 @@ impl AcceptanceEvidence {
         {
             return Err("failed tool calls must include a machine-readable error_code only");
         }
-        for required in [
-            ToolName::WorkspaceInfo,
-            ToolName::ListFiles,
-            ToolName::WorkspaceInstructions,
-            ToolName::ReadFiles,
-            ToolName::Search,
-            ToolName::Patch,
-            ToolName::Exec,
-            ToolName::JobWait,
-            ToolName::GitStatus,
-            ToolName::GitDiff,
+        if self.tool_calls.iter().any(|call| match call.tool {
+            ToolName::Job => !matches!(
+                call.action,
+                Some(
+                    ToolAction::Poll
+                        | ToolAction::Wait
+                        | ToolAction::Output
+                        | ToolAction::List
+                        | ToolAction::Cancel
+                )
+            ),
+            ToolName::Git => !matches!(
+                call.action,
+                Some(
+                    ToolAction::Head
+                        | ToolAction::Status
+                        | ToolAction::Diff
+                        | ToolAction::Log
+                        | ToolAction::Show
+                        | ToolAction::ShowFile
+                        | ToolAction::Add
+                        | ToolAction::Commit
+                        | ToolAction::Switch
+                        | ToolAction::CreateBranch
+                        | ToolAction::Restore
+                        | ToolAction::Push
+                )
+            ),
+            _ => call.action.is_some(),
+        }) {
+            return Err("tool action is missing or invalid for the recorded MCP tool");
+        }
+        for (required_tool, required_action) in [
+            (ToolName::WorkspaceInfo, None),
+            (ToolName::ListFiles, None),
+            (ToolName::WorkspaceInstructions, None),
+            (ToolName::ReadFiles, None),
+            (ToolName::Search, None),
+            (ToolName::Patch, None),
+            (ToolName::Exec, None),
+            (ToolName::Job, Some(ToolAction::Wait)),
+            (ToolName::Git, Some(ToolAction::Status)),
+            (ToolName::Git, Some(ToolAction::Diff)),
         ] {
             if !self.tool_calls.iter().any(|call| {
-                call.tool == required
+                call.tool == required_tool
+                    && call.action == required_action
                     && matches!(
                         call.outcome,
                         ToolOutcome::Succeeded | ToolOutcome::Recovered
@@ -209,6 +250,7 @@ impl AcceptanceEvidence {
             call.outcome == ToolOutcome::Succeeded
                 && self.tool_calls.iter().any(|challenge| {
                     challenge.tool == call.tool
+                        && challenge.action == call.action
                         && challenge.outcome == ToolOutcome::ApprovalRequired
                         && challenge.sequence < call.sequence
                 })
@@ -241,6 +283,7 @@ impl AcceptanceEvidence {
         {
             let recovered = self.tool_calls.iter().any(|call| {
                 call.tool == failed.tool
+                    && call.action == failed.action
                     && call.sequence > failed.sequence
                     && call.outcome == ToolOutcome::Recovered
             });
@@ -273,32 +316,33 @@ mod tests {
             .map(|stage| json!({"stage": stage, "passed": true}))
             .collect::<Vec<_>>();
         let tools = [
-            ("workspace_info", "succeeded"),
-            ("list_files", "succeeded"),
-            ("workspace_instructions", "succeeded"),
-            ("read_files", "succeeded"),
-            ("search", "succeeded"),
-            ("patch", "succeeded"),
-            ("exec", "approval_required"),
-            ("exec", "succeeded"),
-            ("job_wait", "succeeded"),
-            ("git_status", "succeeded"),
-            ("git_diff", "succeeded"),
+            ("workspace_info", None, "succeeded"),
+            ("list_files", None, "succeeded"),
+            ("workspace_instructions", None, "succeeded"),
+            ("read_files", None, "succeeded"),
+            ("search", None, "succeeded"),
+            ("patch", None, "succeeded"),
+            ("exec", None, "approval_required"),
+            ("exec", None, "succeeded"),
+            ("job", Some("wait"), "succeeded"),
+            ("git", Some("status"), "succeeded"),
+            ("git", Some("diff"), "succeeded"),
         ];
         let tool_calls = tools
             .iter()
             .enumerate()
-            .map(|(sequence, (tool, outcome))| {
+            .map(|(sequence, (tool, action, outcome))| {
                 json!({
                     "sequence": sequence as u16 + 1,
                     "tool": tool,
+                    "action": action,
                     "outcome": outcome,
                     "error_code": null
                 })
             })
             .collect::<Vec<_>>();
         serde_json::to_vec(&json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "client_version": "1.2026.09.23",
             "protocol_version": "2025-06-18",
             "stages": stages,
@@ -333,6 +377,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_previous_evidence_schema_version() {
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
+        value["schema_version"] = json!(1);
+        assert!(AcceptanceEvidence::parse(&serde_json::to_vec(&value).unwrap(), false).is_err());
+    }
+
+    #[test]
     fn rejects_free_text_fields_and_missing_approval_retry() {
         let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
         value["private_workspace_dump"] = json!("not allowed");
@@ -341,6 +392,25 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
         value["tool_calls"][7]["outcome"] = json!("failed");
         value["tool_calls"][7]["error_code"] = json!("execution_failed");
+        assert!(AcceptanceEvidence::parse(&serde_json::to_vec(&value).unwrap(), false).is_err());
+    }
+
+    #[test]
+    fn requires_real_mcp_tool_names_and_actions() {
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
+        value["tool_calls"][8]["tool"] = json!("job_wait");
+        value["tool_calls"][8]
+            .as_object_mut()
+            .unwrap()
+            .remove("action");
+        assert!(AcceptanceEvidence::parse(&serde_json::to_vec(&value).unwrap(), false).is_err());
+
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
+        value["tool_calls"][8]["action"] = json!("status");
+        assert!(AcceptanceEvidence::parse(&serde_json::to_vec(&value).unwrap(), false).is_err());
+
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_evidence()).unwrap();
+        value["tool_calls"][0]["tool"] = json!("permission");
         assert!(AcceptanceEvidence::parse(&serde_json::to_vec(&value).unwrap(), false).is_err());
     }
 }

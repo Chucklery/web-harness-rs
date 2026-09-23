@@ -51,32 +51,33 @@ fn reports_complete_bounded_external_evidence() {
     ]
     .map(|stage| serde_json::json!({"stage":stage,"passed":true}));
     let tools = [
-        ("workspace_info", "succeeded"),
-        ("list_files", "succeeded"),
-        ("workspace_instructions", "succeeded"),
-        ("read_files", "succeeded"),
-        ("search", "succeeded"),
-        ("patch", "succeeded"),
-        ("exec", "approval_required"),
-        ("exec", "succeeded"),
-        ("job_wait", "succeeded"),
-        ("git_status", "succeeded"),
-        ("git_diff", "succeeded"),
+        ("workspace_info", None, "succeeded"),
+        ("list_files", None, "succeeded"),
+        ("workspace_instructions", None, "succeeded"),
+        ("read_files", None, "succeeded"),
+        ("search", None, "succeeded"),
+        ("patch", None, "succeeded"),
+        ("exec", None, "approval_required"),
+        ("exec", None, "succeeded"),
+        ("job", Some("wait"), "succeeded"),
+        ("git", Some("status"), "succeeded"),
+        ("git", Some("diff"), "succeeded"),
     ];
     let tool_calls = tools
         .iter()
         .enumerate()
-        .map(|(index, (tool, outcome))| {
+        .map(|(index, (tool, action, outcome))| {
             serde_json::json!({
                 "sequence": index + 1,
                 "tool": tool,
+                "action": action,
                 "outcome": outcome,
                 "error_code": null
             })
         })
         .collect::<Vec<_>>();
     let evidence = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "client_version": "1.2026.09.23",
         "protocol_version": "2025-06-18",
         "stages": stages,
