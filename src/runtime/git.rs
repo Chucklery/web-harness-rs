@@ -209,6 +209,10 @@ impl RuntimeTool for GitRuntime {
             });
         }
         let result = match action {
+            "head" => {
+                let head = git::head(workspace).map_err(git_error)?;
+                return Ok(json!({"head": head}));
+            }
             "status" => git::status(workspace),
             "diff" => {
                 let offset = arguments.get("offset").and_then(Value::as_u64);
@@ -275,7 +279,7 @@ fn verify_expected_head(expected_head: &str, actual_head: &str) -> Result<(), Ru
 
 fn risk_for(action: &str) -> Option<GitRisk> {
     match action {
-        "status" | "diff" | "log" | "show" | "show_file" => Some(GitRisk::ReadOnly),
+        "head" | "status" | "diff" | "log" | "show" | "show_file" => Some(GitRisk::ReadOnly),
         "add" | "commit" | "switch" | "create_branch" | "restore" => Some(GitRisk::LocalWrite),
         "push" => Some(GitRisk::RemoteWrite),
         _ => None,
@@ -382,12 +386,45 @@ mod tests {
 
     #[test]
     fn git_actions_have_explicit_risk_classes() {
+        assert_eq!(risk_for("head"), Some(GitRisk::ReadOnly));
         assert_eq!(risk_for("status"), Some(GitRisk::ReadOnly));
         assert_eq!(risk_for("show_file"), Some(GitRisk::ReadOnly));
         assert_eq!(risk_for("commit"), Some(GitRisk::LocalWrite));
         assert_eq!(risk_for("create_branch"), Some(GitRisk::LocalWrite));
         assert_eq!(risk_for("push"), Some(GitRisk::RemoteWrite));
         assert_eq!(risk_for("unknown"), None);
+    }
+
+    #[test]
+    fn head_action_returns_full_commit_id() {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        crate::git::add(&workspace, &["file.txt".into()]).unwrap();
+        crate::git::commit(&workspace, "initial", &[]).unwrap();
+        let expected = crate::git::head(&workspace).unwrap();
+
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let result = GitRuntime
+            .call(
+                &mut ExecutionContext::new(&workspace, &mut jobs, &mut permissions),
+                &json!({"action":"head"}),
+            )
+            .unwrap();
+        assert_eq!(result["head"], expected);
     }
 
     #[test]
