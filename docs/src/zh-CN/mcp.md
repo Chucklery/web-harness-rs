@@ -13,17 +13,19 @@ web-harness 保持较小的工具集合，避免暴露过大的执行面。
 - 后台任务管理
 - Git 操作
 
+`workspace_instructions` 会从工作区根目录到目标路径查找 `AGENTS.md` 并按根到叶顺序返回。若发现的指令文件通过工作区符号链接指向受保护目标，会像 `read_files` 一样先要求一次性审批；Host 确认后使用 `approval_id` 重试。
+
 工具结果在兼容文本投影之外同时提供有界的 `structuredContent`。客户端应优先使用结构化字段，把文本视为展示或兼容回退数据。
 
 stdio 协议一次处理一行 UTF-8 JSON，单行输入上限为 2 MiB。超限行会被消费完后拒绝，因此后续请求仍可继续处理。
 
 `tools/list` 包含保守的 MCP `ToolAnnotations` 交互提示，用于描述只读、破坏性和外部世界行为，帮助 Host 呈现确认界面；它们不是安全边界。真正的边界仍由 capability 检查、Host elicitation、工作区保护和 OS sandbox 执行。
 
-`read_files` 保留字符串路径的兼容格式，也支持带 `start_line`、`end_line` 和 `expected_read_revision` 的对象路径。结果返回由 metadata 与文件首尾内容摘要组成的有界 `read_revision`；截断结果提供可直接续读的参数，文件版本变化时会以 Conflict 拒绝续读。批量项独立返回：不存在、被拒绝、非普通文件、非 UTF-8、范围越界等错误会放在对应项的结构化 `error` 中，其他文件仍会正常返回。512 KiB 总内容上限在成功项之间共享，预算耗尽后的路径返回 `limit_exceeded`。常见敏感路径需要审批。Patch Update 的目标文件也有硬大小上限。
+`read_files` 保留字符串路径的兼容格式，也支持带 `start_line`、`end_line` 和 `expected_read_revision` 的对象路径。结果返回由 metadata 与文件首尾内容摘要组成的有界 `read_revision`；截断结果提供可直接续读的参数，文件版本变化时会以 Conflict 拒绝续读。批量项独立返回：不存在、被拒绝、非普通文件、非 UTF-8、范围越界等错误会放在对应项的结构化 `error` 中，其他文件仍会正常返回。512 KiB 总内容上限在成功项之间共享，预算耗尽后的路径返回 `limit_exceeded`。常见敏感路径需要审批；指向受保护目标的符号链接别名也会按解析后的目标分类。Patch Update 的目标文件也有硬大小上限。
 
 每一行必须能完整放进当前分页和批次剩余字节预算；单行太大时，该项返回 `limit_exceeded`，避免发出无法推进的续读参数。
 
-常见 protected path（`.env`、私钥、凭据等）会先返回一次性审批票据；Host 确认后，使用 `approval_id` 重试读取。
+常见 protected path（`.env`、私钥、凭据等）会先返回一次性审批票据；指向受保护目标的 symlink 别名同样需要审批。Host 确认后，使用 `approval_id` 重试读取。
 
 ## 搜索
 
@@ -35,7 +37,7 @@ Search 可以传入单个 `query`，也可以传入 1 到 8 个 `queries`；两�
 
 单查询支持 `offset` 续读并返回 `next_offset`；续读时保持 query、scope、glob、mode 和结果上限不变。如果 ripgrep 原始输出触及硬上限，结果只标记 truncated，不提供伪造的 continuation。
 
-如果显式 search scope 本身是 protected path，会要求与敏感文件读取相同的一次性审批；普通工作区范围搜索仍会过滤 protected path。
+如果显式 search scope 本身是 protected path，或是指向受保护目标的 symlink 别名，会要求与敏感文件读取相同的一次性审批；普通工作区范围搜索仍会过滤 protected path。
 
 ## 命令执行
 
@@ -47,7 +49,7 @@ Exec 启动前会按 protected-path 策略检查现存的工作区路径参数�
 
 ## list_files
 
-在不执行 shell 的情况下列出排序后的工作区相对路径、文件、目录和符号链接。默认只列 Git tracked 路径，也支持有界分页、`all` 数据源和简单 include glob。如果枚举本身触发硬扫描上限，结果会标记为 truncated，并且不会伪造可继续的 offset。
+在不执行 shell 的情况下列出排序后的工作区相对路径、文件、目录和符号链接。默认只列 Git tracked 路径，也支持有界分页、`all` 数据源和简单 include glob。受保护文件及指向受保护目标的 symlink 别名会被省略。如果枚举本身触发硬扫描上限，结果会标记为 truncated，并且不会伪造可继续的 offset。
 
 ## job
 

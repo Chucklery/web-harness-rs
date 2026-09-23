@@ -1,5 +1,21 @@
 use std::path::Path;
 
+pub fn is_protected_workspace_path(
+    workspace: &crate::workspace::Workspace,
+    path: impl AsRef<Path>,
+) -> bool {
+    let path = path.as_ref();
+    if is_protected(path) {
+        return true;
+    }
+    let Ok(resolved) = workspace.resolve(path) else {
+        return false;
+    };
+    resolved
+        .strip_prefix(workspace.root())
+        .is_ok_and(is_protected)
+}
+
 pub const PROTECTED_GLOBS: &[&str] = &[
     "!**/.env",
     "!**/.env.*",

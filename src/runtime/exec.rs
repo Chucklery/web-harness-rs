@@ -132,10 +132,9 @@ impl RuntimeTool for ExecRuntime {
             None => None,
         };
         let script_git_risk = script.as_deref().and_then(command_policy::script_git_risk);
-        let protected_read = argv
-            .iter()
-            .skip(1)
-            .any(|argument| is_protected_workspace_argument(context, argument));
+        let protected_read = argv.iter().skip(1).any(|argument| {
+            path_policy::is_protected_workspace_path(context.workspace(), argument)
+        });
         let authorization = ExecAuthorization {
             capability: command_capability.unwrap_or(Capability::ProcessExecute),
             argv: argv.clone(),
@@ -331,18 +330,6 @@ fn request_approval(
 
 fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolError {
     RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
-}
-
-fn is_protected_workspace_argument(context: &ExecutionContext<'_>, argument: &str) -> bool {
-    if path_policy::is_protected(argument) {
-        return context.workspace().resolve(argument).is_ok();
-    }
-    let Ok(resolved) = context.workspace().resolve(argument) else {
-        return false;
-    };
-    resolved
-        .strip_prefix(context.workspace().root())
-        .is_ok_and(path_policy::is_protected)
 }
 
 fn validate_script_shell(shell: &str) -> Result<(), RuntimeToolError> {

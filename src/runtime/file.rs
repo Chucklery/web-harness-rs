@@ -54,14 +54,15 @@ impl RuntimeTool for FileRuntime {
             .iter()
             .map(parse_request)
             .collect::<Result<Vec<_>, _>>()?;
-        if requests
-            .iter()
-            .any(|request| path_policy::is_protected(&request.path))
-        {
+        if requests.iter().any(|request| {
+            path_policy::is_protected_workspace_path(context.workspace(), &request.path)
+        }) {
             let authorization = sensitive_read_authorization(&requests);
             let protected_paths = requests
                 .iter()
-                .filter(|request| path_policy::is_protected(&request.path))
+                .filter(|request| {
+                    path_policy::is_protected_workspace_path(context.workspace(), &request.path)
+                })
                 .map(|request| request.path.clone())
                 .collect::<Vec<_>>();
             if let Some(pending) = protected::authorize_or_request(
@@ -559,5 +560,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value["files"][0]["text"], "TOKEN=secret\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_reads_through_symlinks_require_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        std::os::unix::fs::symlink(".env", dir.path().join("config.txt")).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+
+        let pending = FileRuntime
+            .call(
+                &mut context(&workspace, &mut jobs, &mut permissions),
+                &json!({"paths": ["config.txt"]}),
+            )
+            .unwrap();
+
+        assert_eq!(pending["status"], "approval_required");
+        assert_eq!(pending["protected_paths"], json!(["config.txt"]));
+        assert!(!pending.to_string().contains("TOKEN=secret"));
     }
 }

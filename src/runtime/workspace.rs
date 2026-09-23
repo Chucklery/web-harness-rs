@@ -1,5 +1,7 @@
 use super::context::ExecutionContext;
+use super::protected;
 use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
+use crate::path_policy;
 use crate::permission::Capability;
 use serde_json::{json, Value};
 
@@ -43,10 +45,33 @@ impl RuntimeTool for WorkspaceInstructionsRuntime {
             .authorize(Capability::WorkspaceRead)
             .map_err(permission_error)?;
         let path = arguments.get("path").and_then(Value::as_str).unwrap_or(".");
-        let workspace = context.workspace();
-        let files = workspace.discover_agents(path).map_err(|error| {
+        let files = context.workspace().discover_agents(path).map_err(|error| {
             RuntimeToolError::new(RuntimeErrorKind::Workspace, error.to_string())
         })?;
+        let protected_paths = files
+            .iter()
+            .filter_map(|file| {
+                let workspace = context.workspace();
+                let relative = file.strip_prefix(workspace.root()).ok()?;
+                path_policy::is_protected_workspace_path(workspace, relative)
+                    .then(|| relative.display().to_string())
+            })
+            .collect::<Vec<_>>();
+        if !protected_paths.is_empty() {
+            let mut argv = vec!["workspace_instructions".to_string(), path.to_string()];
+            argv.extend(protected_paths.iter().cloned());
+            let authorization = protected::authorization(argv, true);
+            if let Some(pending) = protected::authorize_or_request(
+                context,
+                arguments.get("approval_id").and_then(Value::as_str),
+                &authorization,
+                "Read protected workspace instructions",
+                &protected_paths,
+            )? {
+                return Ok(pending);
+            }
+        }
+        let workspace = context.workspace();
         let mut instructions = Vec::with_capacity(files.len());
         for file in files {
             let relative = file
@@ -100,5 +125,25 @@ mod tests {
             .call(&mut context, &json!({"path":"."}))
             .unwrap();
         assert_eq!(value["instructions"][0]["text"], "rules");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_symlink_instruction_requires_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        std::os::unix::fs::symlink(".env", dir.path().join("AGENTS.md")).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = WorkspaceInstructionsRuntime
+            .call(&mut context, &json!({"path":"."}))
+            .unwrap();
+
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["protected_paths"], json!(["AGENTS.md"]));
+        assert!(!result.to_string().contains("TOKEN=secret"));
     }
 }

@@ -27,7 +27,7 @@ Returns the canonical configured workspace root.
 
 Reads up to 16 UTF-8 files per call.
 
-Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded metadata-plus-content-sample `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Batch items return independently: a missing, denied, non-regular, non-UTF-8, out-of-range, or otherwise unreadable path carries its own structured `error` while other items still return their content. The 512 KiB total content limit remains shared across successful items; later paths receive `limit_exceeded` once no batch budget remains. Common protected paths (`.env`, private keys, credentials, and similar files) require an approval ticket; retry with its `approval_id` after host confirmation.
+Each path may be a string for legacy whole-file reads or an object with `start_line`, `end_line`, and `expected_read_revision`. Results include a bounded metadata-plus-content-sample `read_revision`; truncated results provide parser-ready continuation parameters. A continuation whose revision no longer matches is rejected as a conflict. Batch items return independently: a missing, denied, non-regular, non-UTF-8, out-of-range, or otherwise unreadable path carries its own structured `error` while other items still return their content. The 512 KiB total content limit remains shared across successful items; later paths receive `limit_exceeded` once no batch budget remains. Common protected paths (`.env`, private keys, credentials, and similar files) require an approval ticket; symlink aliases to protected targets are classified by their resolved target too. Retry with its `approval_id` after host confirmation.
 
 Current limits:
 
@@ -39,7 +39,7 @@ A complete line must fit within the remaining page and batch byte budget. If a s
 
 ## list_files
 
-Lists sorted workspace-relative files, directories, and symlinks without executing a shell command. It defaults to Git-tracked paths and supports bounded pagination, an `all` source, and a simple include glob. If enumeration itself hits its hard scan bound, the result is marked truncated and does not provide a continuation offset.
+Lists sorted workspace-relative files, directories, and symlinks without executing a shell command. It defaults to Git-tracked paths and supports bounded pagination, an `all` source, and a simple include glob. Protected files and symlink aliases to protected targets are omitted. If enumeration itself hits its hard scan bound, the result is marked truncated and does not provide a continuation offset.
 
 ## search
 
@@ -53,11 +53,13 @@ Search also accepts a workspace-relative `scope`, literal mode, bounded include/
 
 Single-query searches accept an `offset` continuation and return `next_offset`; keep the query, scope, glob filters, mode, and result limit unchanged when continuing. If ripgrep output itself reaches its hard bound, the result is marked truncated without a continuation.
 
-An explicit search scope that is itself protected requires the same one-time approval as a protected file read; ordinary workspace-wide searches continue to filter protected paths.
+An explicit search scope that is itself protected requires the same one-time approval as a protected file read; a scope that is a symlink alias to a protected target does too. Ordinary workspace-wide searches continue to filter protected paths.
 
 ## workspace_instructions
 
 Discovers AGENTS.md files from the workspace root down to the target path and returns them in root-to-leaf order.
+
+If a discovered instruction file resolves through a workspace symlink to a protected target, the tool requests the same one-time approval as `read_files`; retry with `approval_id` after Host confirmation.
 
 ## patch
 

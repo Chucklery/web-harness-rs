@@ -50,7 +50,7 @@ impl RuntimeTool for SearchRuntime {
 
         let mut options = parse_options(arguments)?;
 
-        if path_policy::is_protected(&options.scope) {
+        if path_policy::is_protected_workspace_path(context.workspace(), &options.scope) {
             let mut authorization_argv = vec!["search".into(), options.scope.clone()];
             if let Some(query) = query {
                 authorization_argv.push(query.to_string());
@@ -465,6 +465,29 @@ mod tests {
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "workspace.sensitive.read");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_scope_to_protected_file_requires_explicit_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        std::os::unix::fs::symlink(".env", dir.path().join("config.txt")).unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = SearchRuntime
+            .call(
+                &mut context,
+                &json!({"query":"TOKEN", "scope":"config.txt"}),
+            )
+            .unwrap();
+
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "workspace.sensitive.read");
+        assert!(!result.to_string().contains("TOKEN=secret"));
     }
 
     #[test]

@@ -60,7 +60,7 @@ pub(super) fn list() -> Value {
         {
             "name": "workspace_instructions",
             "description": "Return scoped AGENTS.md instructions for a workspace-relative path.",
-            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "additionalProperties": false}
+            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "approval_id": {"type": "string"}}, "additionalProperties": false}
         },
         {
             "name": "patch",

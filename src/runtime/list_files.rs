@@ -158,7 +158,7 @@ fn tracked_entries(
         .filter(|path| !path.is_empty())
         .filter_map(|path| std::str::from_utf8(path).ok())
         .filter(|path| {
-            !path_policy::is_protected(path)
+            !path_policy::is_protected_workspace_path(context.workspace(), path)
                 && include
                     .map(|pattern| glob_matches(pattern, path))
                     .unwrap_or(true)
@@ -206,7 +206,7 @@ fn all_entries(
             } else {
                 FileKind::File
             };
-            if !path_policy::is_protected(&relative_text)
+            if !path_policy::is_protected_workspace_path(context.workspace(), &relative_text)
                 && include
                     .map(|pattern| glob_matches(pattern, &relative_text))
                     .unwrap_or(true)
@@ -218,7 +218,7 @@ fn all_entries(
                 });
             }
             if kind == FileKind::Directory
-                && !path_policy::is_protected(&relative_text)
+                && !path_policy::is_protected_workspace_path(context.workspace(), &relative_text)
                 && context.workspace().resolve(&relative_text).is_ok()
             {
                 pending.push(item_path);
@@ -376,6 +376,8 @@ mod tests {
         fs::write(dir.path().join(".ssh/id_ed25519"), "private").unwrap();
         fs::write(dir.path().join("secrets/config.json"), "private").unwrap();
         fs::write(dir.path().join("visible.txt"), "visible").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(".env", dir.path().join("config.txt")).unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();

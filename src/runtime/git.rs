@@ -77,7 +77,11 @@ impl RuntimeTool for GitRuntime {
                 let protected_paths = match action {
                     "diff" => git::protected_diff_paths(context.workspace(), staged, &pathspec)
                         .map_err(git_error)?,
-                    "show_file" if pathspec.first().is_some_and(path_policy::is_protected) => {
+                    "show_file"
+                        if pathspec.first().is_some_and(|path| {
+                            path_policy::is_protected_workspace_path(context.workspace(), path)
+                        }) =>
+                    {
                         pathspec.clone()
                     }
                     _ => Vec::new(),
