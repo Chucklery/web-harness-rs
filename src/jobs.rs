@@ -978,7 +978,12 @@ mod tests {
     fn seatbelt_outbound_approval_allows_an_outgoing_connection() {
         use std::net::TcpListener;
 
-        if !crate::sandbox::can_upgrade_network() || !std::path::Path::new("/usr/bin/nc").exists() {
+        if !crate::sandbox::can_upgrade_network() {
+            eprintln!("skipping: outbound upgrade is unavailable inside the current sandbox");
+            return;
+        }
+        if !std::path::Path::new("/usr/bin/nc").exists() {
+            eprintln!("skipping: /usr/bin/nc is unavailable");
             return;
         }
         let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
