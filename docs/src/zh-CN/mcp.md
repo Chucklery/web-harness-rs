@@ -43,6 +43,8 @@ Exec 默认使用 argv 形式；需要 pipes、重定向或短命令链时，也
 
 通过 exec 直接运行的 Git 命令会在启动前分类，并复用结构化 Git 的审批 capability：`git push` 需要 `git.remote.write`，其他直接 Git 调用保守地要求 `git.local.write`。Script 模式会保守检测字面 Git mutation token，并额外要求 `git_approval_id` 对应的 `git.local.write` 或 `git.remote.write` 审批；这与脚本审批及（若请求）outbound 网络审批相互独立。该文本扫描只是策略提示，不是安全边界；最终边界仍是 Host 对脚本的明确审批和 OS sandbox。已批准的普通程序或包装器仍可能修改 sandbox 内的工作区，因此通用进程审批本身授予工作区范围内的执行权限。
 
+Exec 启动前会按 protected-path 策略检查现存的工作区路径参数，并先解析符号链接；指向受保护文件的工作区内别名也需要明确审批。这是针对直接路径参数的补充检查，不是通用程序行为解析器；script 模式始终需要明确审批。
+
 ## list_files
 
 在不执行 shell 的情况下列出排序后的工作区相对路径、文件、目录和符号链接。默认只列 Git tracked 路径，也支持有界分页、`all` 数据源和简单 include glob。如果枚举本身触发硬扫描上限，结果会标记为 truncated，并且不会伪造可继续的 offset。

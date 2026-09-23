@@ -132,9 +132,10 @@ impl RuntimeTool for ExecRuntime {
             None => None,
         };
         let script_git_risk = script.as_deref().and_then(command_policy::script_git_risk);
-        let protected_read = argv.iter().skip(1).any(|argument| {
-            path_policy::is_protected(argument) && context.workspace().resolve(argument).is_ok()
-        });
+        let protected_read = argv
+            .iter()
+            .skip(1)
+            .any(|argument| is_protected_workspace_argument(context, argument));
         let authorization = ExecAuthorization {
             capability: command_capability.unwrap_or(Capability::ProcessExecute),
             argv: argv.clone(),
@@ -330,6 +331,18 @@ fn request_approval(
 
 fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolError {
     RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+}
+
+fn is_protected_workspace_argument(context: &ExecutionContext<'_>, argument: &str) -> bool {
+    if path_policy::is_protected(argument) {
+        return context.workspace().resolve(argument).is_ok();
+    }
+    let Ok(resolved) = context.workspace().resolve(argument) else {
+        return false;
+    };
+    resolved
+        .strip_prefix(context.workspace().root())
+        .is_ok_and(path_policy::is_protected)
 }
 
 fn validate_script_shell(shell: &str) -> Result<(), RuntimeToolError> {
@@ -578,6 +591,24 @@ mod tests {
 
         let result = ExecRuntime
             .call(&mut context, &json!({"argv": ["cat", ".env"]}))
+            .unwrap();
+        assert_eq!(result["status"], "approval_required");
+        assert_eq!(result["capability"], "process.execute");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_exec_reading_symlink_to_protected_path_requires_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "TOKEN=secret\n").unwrap();
+        std::os::unix::fs::symlink(".env", dir.path().join("config.txt")).unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        let result = ExecRuntime
+            .call(&mut context, &json!({"argv": ["cat", "config.txt"]}))
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "process.execute");
