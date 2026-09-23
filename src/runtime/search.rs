@@ -128,6 +128,7 @@ where
     F: FnMut(&str, usize) -> Result<search::SearchOutput, SearchError>,
 {
     let mut remaining_results = max_results;
+    let mut remaining_context_bytes = search::MAX_CONTEXT_OUTPUT_BYTES;
     let mut results = Vec::with_capacity(queries.len());
     for (index, query) in queries.iter().enumerate() {
         let remaining_queries = queries.len() - index;
@@ -147,7 +148,8 @@ where
         }
 
         match run_query(query, per_query_limit) {
-            Ok(output) => {
+            Ok(mut output) => {
+                search::limit_context_output(&mut output.matches, &mut remaining_context_bytes);
                 let result_count = match mode {
                     search::SearchMode::Matches => output.matches.len(),
                     search::SearchMode::FilesWithMatches => output.files.len(),
@@ -203,6 +205,24 @@ fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeTool
     };
     let include = parse_globs(arguments.get("include"))?;
     let exclude = parse_globs(arguments.get("exclude"))?;
+    let context_lines = match arguments.get("context_lines") {
+        None => 0,
+        Some(value) => {
+            let value = value
+                .as_u64()
+                .ok_or_else(|| invalid("context_lines must be an unsigned integer"))?;
+            if value > search::MAX_CONTEXT_LINES as u64 {
+                return Err(invalid(format!(
+                    "context_lines must be 0..={}",
+                    search::MAX_CONTEXT_LINES
+                )));
+            }
+            value as usize
+        }
+    };
+    if context_lines > 0 && mode != search::SearchMode::Matches {
+        return Err(invalid("context_lines is only supported in matches mode"));
+    }
     let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0);
     if offset > 100_000 {
         return Err(invalid("offset must be at most 100000"));
@@ -221,6 +241,7 @@ fn parse_options(arguments: &Value) -> Result<search::SearchOptions, RuntimeTool
         exclude,
         mode,
         offset: offset as usize,
+        context_lines,
         allow_protected: false,
     })
 }
@@ -349,6 +370,8 @@ mod tests {
                         path: "src/lib.rs".into(),
                         line: 1,
                         text: query.into(),
+                        context: Vec::new(),
+                        context_truncated: false,
                     }],
                     files: Vec::new(),
                     counts: Vec::new(),
@@ -373,6 +396,8 @@ mod tests {
                     path: "src/lib.rs".into(),
                     line: 1,
                     text: "hit".into(),
+                    context: Vec::new(),
+                    context_truncated: false,
                 }],
                 files: Vec::new(),
                 counts: Vec::new(),
@@ -387,6 +412,48 @@ mod tests {
     }
 
     #[test]
+    fn batched_search_shares_one_context_output_budget() {
+        let results = batch_search(&["one", "two"], 200, search::SearchMode::Matches, |_, _| {
+            Ok(search::SearchOutput {
+                matches: (0..100)
+                    .map(|index| search::SearchMatch {
+                        path: "a.txt".into(),
+                        line: index + 1,
+                        text: "hit".into(),
+                        context: (0..4)
+                            .map(|offset| search::SearchContextLine {
+                                line: offset + 1,
+                                text: "x".repeat(500),
+                            })
+                            .collect(),
+                        context_truncated: false,
+                    })
+                    .collect(),
+                files: Vec::new(),
+                counts: Vec::new(),
+                truncated: false,
+                offset: 0,
+                next_offset: None,
+            })
+        });
+
+        let encoded_context_bytes: usize = results
+            .iter()
+            .flat_map(|result| result["matches"].as_array().unwrap())
+            .flat_map(|matched| matched["context"].as_array().into_iter().flatten())
+            .map(|line| serde_json::to_string(line).unwrap().len())
+            .sum();
+        assert!(encoded_context_bytes <= search::MAX_CONTEXT_OUTPUT_BYTES);
+        assert_eq!(
+            results[1]["matches"][0]["context"]
+                .as_array()
+                .map_or(0, Vec::len),
+            0
+        );
+        assert_eq!(results[1]["matches"][0]["context_truncated"], true);
+    }
+
+    #[test]
     fn protected_scope_requires_explicit_approval() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
@@ -398,6 +465,25 @@ mod tests {
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "workspace.sensitive.read");
+    }
+
+    #[test]
+    fn context_lines_are_bounded_and_limited_to_match_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = crate::jobs::JobManager::new();
+        let mut permissions = crate::permission::PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        for arguments in [
+            json!({"query":"x","context_lines":3}),
+            json!({"query":"x","context_lines":-1}),
+            json!({"query":"x","context_lines":"1"}),
+            json!({"query":"x","context_lines":1,"mode":"count"}),
+        ] {
+            let error = SearchRuntime.call(&mut context, &arguments).unwrap_err();
+            assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+        }
     }
 
     #[test]

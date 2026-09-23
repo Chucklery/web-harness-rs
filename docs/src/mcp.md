@@ -49,7 +49,7 @@ ripgrep is an external runtime dependency, not a bundled one. When `rg` is missi
 
 The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. A failure for one batch query is returned beside that query and does not prevent the remaining queries from running; entries skipped after the shared result budget is exhausted are marked `result_budget_exhausted`. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
 
-Search also accepts a workspace-relative `scope`, literal mode, bounded include/exclude globs, and `matches`, `files_with_matches`, or `count` output modes. It continues to invoke the system ripgrep process per request and does not maintain an index.
+Search also accepts a workspace-relative `scope`, literal mode, bounded include/exclude globs, and `matches`, `files_with_matches`, or `count` output modes. In `matches` mode, optional `context_lines` returns up to two nearby lines on either side of each hit; nearby lines are redacted and share a 128 KiB serialized-output budget. If that budget or ripgrep's output cap is reached, affected hits report `context_truncated`. It continues to invoke the system ripgrep process per request and does not maintain an index.
 
 Single-query searches accept an `offset` continuation and return `next_offset`; keep the query, scope, glob filters, mode, and result limit unchanged when continuing. If ripgrep output itself reaches its hard bound, the result is marked truncated without a continuation.
 

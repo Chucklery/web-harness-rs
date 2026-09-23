@@ -4,8 +4,14 @@ use crate::path_policy;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use thiserror::Error;
+
+pub const MAX_CONTEXT_LINES: usize = 2;
+const MAX_CONTEXT_TEXT_CHARS: usize = 500;
+pub const MAX_CONTEXT_OUTPUT_BYTES: usize = 128 * 1024;
+const MAX_CONTEXT_RECORDS: usize = 8 * 1024;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -36,6 +42,20 @@ pub struct SearchMatch {
     pub path: String,
     pub line: u64,
     pub text: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<SearchContextLine>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub context_truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchContextLine {
+    pub line: u64,
+    pub text: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +73,7 @@ pub struct SearchOptions {
     pub exclude: Vec<String>,
     pub mode: SearchMode,
     pub offset: usize,
+    pub context_lines: usize,
     pub allow_protected: bool,
 }
 
@@ -65,6 +86,7 @@ impl Default for SearchOptions {
             exclude: Vec::new(),
             mode: SearchMode::Matches,
             offset: 0,
+            context_lines: 0,
             allow_protected: false,
         }
     }
@@ -102,6 +124,7 @@ pub fn search(
     options: &SearchOptions,
 ) -> Result<SearchOutput, SearchError> {
     let max_results = max_results.clamp(1, 200);
+    let context_lines = options.context_lines.min(MAX_CONTEXT_LINES);
     workspace
         .resolve(&options.scope)
         .map_err(|error| SearchError::Failed(error.to_string()))?;
@@ -110,6 +133,9 @@ pub fn search(
     match options.mode {
         SearchMode::Matches => {
             command.args(["--json", "--line-number"]);
+            if context_lines > 0 {
+                command.arg("--context").arg(context_lines.to_string());
+            }
         }
         SearchMode::FilesWithMatches => {
             command.arg("--files-with-matches");
@@ -177,7 +203,13 @@ pub fn search(
     };
     match options.mode {
         SearchMode::Matches => {
-            let (matches, more) = parse_matches(&stdout, max_results, options.offset);
+            let (matches, more) = parse_matches(
+                &stdout,
+                max_results,
+                options.offset,
+                context_lines,
+                output.stdout_truncated,
+            );
             result.matches = matches;
             if more && !output.stdout_truncated {
                 result.next_offset = Some(options.offset + result.matches.len());
@@ -225,15 +257,49 @@ pub fn search(
 ///
 /// Split out from [`content_search`] so the redaction of matched text can be
 /// tested without requiring ripgrep to be installed.
-fn parse_matches(stdout: &str, max_results: usize, offset: usize) -> (Vec<SearchMatch>, bool) {
+fn parse_matches(
+    stdout: &str,
+    max_results: usize,
+    offset: usize,
+    context_lines: usize,
+    context_output_truncated: bool,
+) -> (Vec<SearchMatch>, bool) {
     let mut matches = Vec::new();
+    let mut nearby_lines = HashMap::<String, HashMap<u64, String>>::new();
+    let mut nearby_line_count = 0;
+    let mut nearby_lines_truncated = false;
     let mut seen = 0;
     let mut more = false;
     for line in stdout.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if value.get("type").and_then(|value| value.as_str()) != Some("match") {
+        let record_type = value.get("type").and_then(|value| value.as_str());
+        if record_type != Some("match") && record_type != Some("context") {
+            continue;
+        }
+        let data = &value["data"];
+        let path = data["path"]["text"].as_str().unwrap_or_default();
+        let line_number = data["line_number"].as_u64().unwrap_or_default();
+        let raw_text = data["lines"]["text"].as_str().unwrap_or_default();
+        let text = if record_type == Some("match") {
+            raw_text.trim_end()
+        } else {
+            raw_text.trim_end_matches(['\r', '\n'])
+        };
+        if context_lines > 0 && !path.is_empty() && line_number > 0 {
+            let file_lines = nearby_lines.entry(path.to_string()).or_default();
+            if let std::collections::hash_map::Entry::Vacant(entry) = file_lines.entry(line_number)
+            {
+                if nearby_line_count < MAX_CONTEXT_RECORDS {
+                    entry.insert(text.to_string());
+                    nearby_line_count += 1;
+                } else {
+                    nearby_lines_truncated = true;
+                }
+            }
+        }
+        if record_type != Some("match") {
             continue;
         }
         if seen < offset {
@@ -244,28 +310,78 @@ fn parse_matches(stdout: &str, max_results: usize, offset: usize) -> (Vec<Search
             more = true;
             break;
         }
-        let data = &value["data"];
         matches.push(SearchMatch {
-            path: data["path"]["text"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            line: data["line_number"].as_u64().unwrap_or_default(),
+            path: path.to_string(),
+            line: line_number,
             // Matched text is file content and can contain a secret literal;
             // scrub it here so the tool never returns it verbatim.
-            text: redact::text(
-                data["lines"]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .trim_end(),
-            )
-            .chars()
-            .take(2000)
-            .collect(),
+            text: redact::text(text).chars().take(2000).collect(),
+            context: Vec::new(),
+            context_truncated: false,
         });
         seen += 1;
     }
+    if context_lines > 0 {
+        attach_context(
+            &mut matches,
+            &nearby_lines,
+            context_lines.min(MAX_CONTEXT_LINES),
+            context_output_truncated || nearby_lines_truncated,
+        );
+    }
     (matches, more)
+}
+
+fn attach_context(
+    matches: &mut [SearchMatch],
+    nearby_lines: &HashMap<String, HashMap<u64, String>>,
+    context_lines: usize,
+    context_output_truncated: bool,
+) {
+    for matched in matches.iter_mut() {
+        matched.context_truncated = context_output_truncated;
+        let first_line = matched.line.saturating_sub(context_lines as u64).max(1);
+        let last_line = matched.line.saturating_add(context_lines as u64);
+        for line_number in first_line..=last_line {
+            if line_number == matched.line {
+                continue;
+            }
+            let Some(text) = nearby_lines
+                .get(&matched.path)
+                .and_then(|file_lines| file_lines.get(&line_number))
+            else {
+                continue;
+            };
+            let text = redact::text(text)
+                .chars()
+                .take(MAX_CONTEXT_TEXT_CHARS)
+                .collect::<String>();
+            matched.context.push(SearchContextLine {
+                line: line_number,
+                text,
+            });
+        }
+    }
+    let mut remaining_bytes = MAX_CONTEXT_OUTPUT_BYTES;
+    limit_context_output(matches, &mut remaining_bytes);
+}
+
+pub(crate) fn limit_context_output(matches: &mut [SearchMatch], remaining_bytes: &mut usize) {
+    for matched in matches {
+        let mut bounded_context = Vec::with_capacity(matched.context.len());
+        for line in matched.context.drain(..) {
+            let encoded_bytes = serde_json::to_string(&line)
+                .map(|encoded| encoded.len())
+                .unwrap_or_else(|_| line.text.len());
+            if encoded_bytes > *remaining_bytes {
+                matched.context_truncated = true;
+                continue;
+            }
+            *remaining_bytes -= encoded_bytes;
+            bounded_context.push(line);
+        }
+        matched.context = bounded_context;
+    }
 }
 
 #[cfg(test)]
@@ -298,6 +414,18 @@ mod tests {
         .to_string()
     }
 
+    fn context_line(path: &str, line: u64, text: &str) -> String {
+        serde_json::json!({
+            "type": "context",
+            "data": {
+                "path": { "text": path },
+                "line_number": line,
+                "lines": { "text": text },
+            }
+        })
+        .to_string()
+    }
+
     #[test]
     fn matched_text_is_redacted() {
         let stdout = format!(
@@ -305,7 +433,7 @@ mod tests {
             match_line("a.txt", 3, "API_KEY=abc123\n"),
             match_line("b.txt", 9, "Authorization: Bearer topsecret\n"),
         );
-        let (matches, _) = parse_matches(&stdout, 10, 0);
+        let (matches, _) = parse_matches(&stdout, 10, 0, 0, false);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].path, "a.txt");
         assert_eq!(matches[0].line, 3);
@@ -314,12 +442,63 @@ mod tests {
     }
 
     #[test]
+    fn nearby_context_is_bounded_and_redacted() {
+        let stdout = format!(
+            "{}\n{}\n{}\n",
+            context_line("a.txt", 1, "before\n"),
+            match_line("a.txt", 2, "needle\n"),
+            context_line("a.txt", 3, "API_KEY=neighbor-secret\n"),
+        );
+        let (matches, _) = parse_matches(&stdout, 10, 0, 1, false);
+        assert_eq!(matches[0].context.len(), 2);
+        assert_eq!(matches[0].context[0].line, 1);
+        assert_eq!(matches[0].context[0].text, "before");
+        assert_eq!(matches[0].context[1].line, 3);
+        assert_eq!(matches[0].context[1].text, "API_KEY=[REDACTED]");
+        assert!(!matches[0].context[1].text.contains("neighbor-secret"));
+    }
+
+    #[test]
+    fn context_output_has_a_shared_serialized_byte_budget() {
+        let mut matches = (0..200)
+            .map(|index| SearchMatch {
+                path: "a.txt".into(),
+                line: index * 10 + 5,
+                text: "needle".into(),
+                context: Vec::new(),
+                context_truncated: false,
+            })
+            .collect::<Vec<_>>();
+        let mut nearby_lines = HashMap::<String, HashMap<u64, String>>::new();
+        for matched in &matches {
+            for offset in [-2i64, -1, 1, 2] {
+                nearby_lines
+                    .entry(matched.path.clone())
+                    .or_default()
+                    .insert(
+                        (matched.line as i64 + offset) as u64,
+                        "x".repeat(MAX_CONTEXT_TEXT_CHARS),
+                    );
+            }
+        }
+        attach_context(&mut matches, &nearby_lines, 2, false);
+
+        let encoded_bytes: usize = matches
+            .iter()
+            .flat_map(|matched| matched.context.iter())
+            .map(|line| serde_json::to_string(&line.text).unwrap().len())
+            .sum();
+        assert!(encoded_bytes <= MAX_CONTEXT_OUTPUT_BYTES);
+        assert!(matches.iter().any(|matched| matched.context_truncated));
+    }
+
+    #[test]
     fn non_match_records_and_malformed_lines_are_ignored() {
         let stdout = format!(
             "{{\"type\":\"begin\"}}\nnot json\n{}\n{{\"type\":\"summary\"}}\n",
             match_line("a.txt", 1, "needle\n"),
         );
-        let (matches, _) = parse_matches(&stdout, 10, 0);
+        let (matches, _) = parse_matches(&stdout, 10, 0, 0, false);
         assert_eq!(matches.len(), 1);
     }
 
@@ -329,7 +508,7 @@ mod tests {
             .map(|n| match_line("a.txt", n, "needle\n"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(parse_matches(&stdout, 5, 0).0.len(), 5);
+        assert_eq!(parse_matches(&stdout, 5, 0, 0, false).0.len(), 5);
     }
 
     #[test]
@@ -338,7 +517,7 @@ mod tests {
             .map(|n| match_line("a.txt", n, "needle\n"))
             .collect::<Vec<_>>()
             .join("\n");
-        let (matches, more) = parse_matches(&stdout, 1, 1);
+        let (matches, more) = parse_matches(&stdout, 1, 1, 0, false);
         assert_eq!(matches[0].line, 2);
         assert!(more);
     }
@@ -363,6 +542,30 @@ mod tests {
         };
         let result = search(&workspace, "EXAMPLE", 10, &options).unwrap();
         assert_eq!(result.matches.len(), 1);
+    }
+
+    #[test]
+    fn ripgrep_context_is_returned_with_the_match() {
+        if !ripgrep_available() {
+            eprintln!("skipping: ripgrep is not installed");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        fs::write(dir.path().join("sample.txt"), "before\nneedle\nafter\n").unwrap();
+        let options = SearchOptions {
+            literal: true,
+            context_lines: 1,
+            ..SearchOptions::default()
+        };
+
+        let result = search(&workspace, "needle", 10, &options).unwrap();
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].context.len(), 2);
+        assert_eq!(result.matches[0].context[0].line, 1);
+        assert_eq!(result.matches[0].context[0].text, "before");
+        assert_eq!(result.matches[0].context[1].line, 3);
+        assert_eq!(result.matches[0].context[1].text, "after");
     }
 
     #[test]

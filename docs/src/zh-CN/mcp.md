@@ -29,7 +29,7 @@ stdio 协议一次处理一行 UTF-8 JSON，单行输入上限为 2 MiB。超限
 
 使用系统中已安装的 ripgrep，这是唯一的运行时外部依赖。Homebrew 安装会自动带上 ripgrep；手动解压 Release 包的用户需要自行安装（`brew install ripgrep` / `apt install ripgrep`）。当 `PATH` 中找不到 `rg` 时，Search 会返回一条指明 ripgrep 及安装方式的依赖错误，其余工具不受影响。
 
-Search 还支持工作区相对 `scope`、literal 模式、有界 include/exclude glob，以及 `matches`、`files_with_matches`、`count` 输出模式。每次请求仍调用系统 ripgrep，不建立常驻索引。
+Search 还支持工作区相对 `scope`、literal 模式、有界 include/exclude glob，以及 `matches`、`files_with_matches`、`count` 输出模式。`matches` 模式可选 `context_lines`，每个命中前后最多返回两行；上下文会脱敏，并共享 128 KiB 序列化输出预算。预算或 ripgrep 输出上限耗尽时，相关命中会标记 `context_truncated`。每次请求仍调用系统 ripgrep，不建立常驻索引。
 
 Search 可以传入单个 `query`，也可以传入 1 到 8 个 `queries`；两种形式互斥。批量查询共享整个响应的 `max_results` 上限。某一项失败时，会在对应结果中返回独立错误，其余查询仍会继续；共享结果预算耗尽后跳过的项会标记 `result_budget_exhausted`。
 

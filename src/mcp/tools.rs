@@ -47,7 +47,8 @@ pub(super) fn list() -> Value {
                     "scope": {"type": "string"},
                     "include": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
                     "exclude": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 16},
-                    "mode": {"type": "string", "enum": ["matches", "files_with_matches", "count"], "default": "matches"}
+                    "mode": {"type": "string", "enum": ["matches", "files_with_matches", "count"], "default": "matches"},
+                    "context_lines": {"type": "integer", "minimum": 0, "maximum": 2, "default": 0}
                 },
                 "oneOf": [
                     {"required": ["query"], "not": {"required": ["queries"]}},
@@ -231,5 +232,7 @@ mod tests {
         }
         let exec = names.iter().find(|tool| tool["name"] == "exec").unwrap();
         assert!(exec["inputSchema"]["properties"]["git_approval_id"].is_object());
+        let search = names.iter().find(|tool| tool["name"] == "search").unwrap();
+        assert!(search["inputSchema"]["properties"]["context_lines"].is_object());
     }
 }
