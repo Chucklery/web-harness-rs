@@ -1,6 +1,6 @@
 [package]
 name = "web-harness"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 license = "Apache-2.0"
 description = "A lightweight local Codex-style execution host for ChatGPT Web"
@@ -38,4 +38,3 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
-

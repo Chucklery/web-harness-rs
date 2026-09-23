@@ -2,6 +2,25 @@
 
 All notable changes will be documented here.
 
+## 0.3.4 - 2026-09-23
+
+### Added
+
+- Added bounded file listing, ranged/revision-fenced reads, scoped and pageable search, incremental Job output, and paged Git diff/revision-file inspection.
+- Added bounded one-shot scripts and separately approved outbound networking while keeping Git remote mutations under their own approval capability.
+- Added a structured Secure MCP Tunnel acceptance harness and host-mediated, one-time approval prompts with cancellation handling.
+
+### Security
+
+- Protected common credential paths across file, search, Git, and recognizable exec reads, including workspace symlink targets and cwd-relative exec paths.
+- Required explicit approval for opaque command launchers, direct/aliased Git mutations, and scripts that perform Git mutations; bound approvals to exact requests and current Git HEAD where applicable.
+- Hardened approval state, process-group cleanup, output bounds, and failure recovery across patch, Job, and Tunnel operations.
+
+### Changed
+
+- Isolated MCP tool schemas and stdio transport orchestration from the runtime registry and tool execution paths.
+- Added maintainer-only runtime benchmark coverage while keeping release tooling out of default production builds.
+
 ## 0.3.3 - 2026-09-20
 
 ### Fixed
@@ -135,4 +154,3 @@ All notable changes will be documented here.
 - Approval-gated structured Git add/commit/switch/restore/push workflow.
 - Open-source project baseline.
 - mdBook documentation site and GitHub Pages workflow.
-
