@@ -167,15 +167,15 @@ impl RuntimeTool for ExecRuntime {
             } else {
                 let (summary, reason) = match capability {
                     Capability::GitLocalWrite => (
-                        "Run Git through exec".to_string(),
+                        "Run a direct Git command through exec; review the exact arguments before approving".to_string(),
                         "Direct Git execution may change the local repository and requires explicit one-time approval".to_string(),
                     ),
                     Capability::GitRemoteWrite => (
-                        "Run Git push through exec".to_string(),
-                        "Direct Git push may change a remote repository and requires explicit one-time approval".to_string(),
+                        "Run a Git remote operation through exec; review the exact arguments before approving".to_string(),
+                        "This operation may change a remote repository and requires explicit one-time approval".to_string(),
                     ),
                     Capability::ProcessExecute if script_mode => (
-                        "Run an approved workspace script".to_string(),
+                        "Run a workspace script; review the exact script and arguments before approving".to_string(),
                         "Script execution requires explicit one-time approval".to_string(),
                     ),
                     Capability::ProcessExecute if protected_read => (
@@ -184,13 +184,16 @@ impl RuntimeTool for ExecRuntime {
                     ),
                     Capability::ProcessExecute if opaque_execution => (
                         format!(
-                            "Run opaque command {}",
-                            argv.first().map(String::as_str).unwrap_or("?")
+                            "Run opaque command {}; review the exact exec arguments before approving",
+                            safe_executable_label(&argv)
                         ),
                         "Command launchers and interpreter-driven commands require explicit one-time approval".to_string(),
                     ),
                     Capability::ProcessExecute => (
-                        format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
+                        format!(
+                            "Run {}; review the exact exec arguments before approving",
+                            safe_executable_label(&argv)
+                        ),
                         "OS sandbox enforcement is not enabled; explicit approval is required".to_string(),
                     ),
                     _ => unreachable!("only command capabilities are handled here"),
@@ -262,8 +265,8 @@ impl RuntimeTool for ExecRuntime {
                     "network_approval_id",
                     Capability::NetworkOutbound,
                     format!(
-                        "Run {} with outbound network",
-                        argv.first().map(String::as_str).unwrap_or("?")
+                        "Run {} with outbound network; review the exact exec arguments before approving",
+                        safe_executable_label(&argv)
                     ),
                     "Outbound network is denied by default and requires explicit one-time approval"
                         .to_string(),
@@ -316,6 +319,21 @@ impl RuntimeTool for ExecRuntime {
 
         Ok(value)
     }
+}
+
+fn safe_executable_label(argv: &[String]) -> String {
+    argv.first()
+        .map(|value| {
+            std::path::Path::new(value)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(value)
+        })
+        .unwrap_or("?")
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(64)
+        .collect::<String>()
 }
 
 fn request_approval(

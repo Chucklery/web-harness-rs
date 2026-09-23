@@ -28,6 +28,8 @@ Process stdout/stderr are passed through a bounded redaction layer before being 
 
 Commands that can dispatch nested programs (including `env`, `xargs`, shell/interpreter executables) require one-time `process.execute` approval even inside the macOS sandbox. The approval is bound to argv, cwd, background mode, stdin, network policy, and protected-read status. This prevents these known opaque launch forms from silently bypassing approval; the sandbox remains the boundary for other arbitrary developer tools.
 
+Host elicitation displays the capability, short operation summary, and approval reason, and asks the user to review the original tool request. Raw argv/stdin are not copied into the local approval display record because they may contain secrets.
+
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
 For first-use convenience, interactive setup persists CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a user credential file. On macOS/Linux this is a web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc), rewritten atomically with mode 0600. On Windows it is a plaintext credentials.env file under the current user's APPDATA when available. API-key input disables terminal echo, and the API key is not copied into config.json or tunnel command arguments.

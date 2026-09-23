@@ -67,11 +67,22 @@ pub(super) fn request_host_approval<R: BufRead, W: Write>(
         .as_ref()
         .and_then(|result| result.get("structuredContent"))
         .ok_or_else(|| io::Error::other("approval response is missing structured content"))?;
-    let message = structured
-        .get("approval")
+    let approval = structured.get("approval");
+    let summary = approval
         .and_then(|approval| approval.get("summary"))
         .and_then(Value::as_str)
         .unwrap_or("Confirm this protected operation");
+    let capability = structured
+        .get("capability")
+        .and_then(Value::as_str)
+        .unwrap_or("protected operation");
+    let reason = approval
+        .and_then(|approval| approval.get("reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("This operation requires user confirmation");
+    let message = format!(
+        "Capability: {capability}. {summary}. {reason}. Review the original tool request before approving; this approval is one-time."
+    );
     let request_id = format!("web_harness_elicitation_{}", session.next_server_request_id);
     session.next_server_request_id = session.next_server_request_id.saturating_add(1);
     let request = json!({
@@ -80,7 +91,7 @@ pub(super) fn request_host_approval<R: BufRead, W: Write>(
         "method": "elicitation/create",
         "params": {
             "mode": "form",
-            "message": message,
+        "message": message,
             "requestedSchema": {
                 "type": "object",
                 "properties": {
@@ -150,7 +161,12 @@ mod tests {
             result: Some(json!({
                 "structuredContent": {
                     "status": "approval_required",
-                    "approval": {"id": "ticket-1", "summary": "Confirm test"},
+                    "capability": "process.execute",
+                    "approval": {
+                        "id": "ticket-1",
+                        "summary": "Run test; inspect arguments",
+                        "reason": "This command can execute code"
+                    },
                     "approval_argument": "approval_id"
                 }
             })),
@@ -207,6 +223,29 @@ mod tests {
             run_decision("{\"id\":\"web_harness_elicitation_1\",\"result\":{\"action\":\"accept\",\"content\":{\"approved\":false}}}\n"),
             HostDecision::Decline
         ));
+    }
+
+    #[test]
+    fn elicitation_shows_capability_reason_and_review_reminder() {
+        let mut input = Cursor::new(
+            "{\"id\":\"web_harness_elicitation_1\",\"result\":{\"action\":\"decline\"}}\n"
+                .to_string(),
+        );
+        let mut output = Vec::new();
+        let mut session = Session::new();
+        request_host_approval(
+            &mut input,
+            &mut output,
+            &mut session,
+            &pending_response(),
+            Some(&json!(17)),
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&output).unwrap();
+        let message = request["params"]["message"].as_str().unwrap();
+        assert!(message.contains("process.execute"));
+        assert!(message.contains("This command can execute code"));
+        assert!(message.contains("Review the original tool request"));
     }
 
     #[test]
