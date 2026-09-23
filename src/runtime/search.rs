@@ -111,34 +111,78 @@ impl RuntimeTool for SearchRuntime {
             parsed.push(query);
         }
 
-        let mut remaining_results = max_results;
-        let mut results = Vec::with_capacity(parsed.len());
-        for (index, query) in parsed.iter().enumerate() {
-            let remaining_queries = parsed.len() - index;
-            let per_query_limit = remaining_results.div_ceil(remaining_queries);
-            let matches = if per_query_limit == 0 {
-                search::SearchOutput {
-                    matches: Vec::new(),
-                    files: Vec::new(),
-                    counts: Vec::new(),
-                    truncated: false,
-                    offset: 0,
-                    next_offset: None,
-                }
-            } else {
-                search::search(context.workspace(), query, per_query_limit, &options)
-                    .map_err(search_error)?
-            };
-            let result_count = match options.mode {
-                search::SearchMode::Matches => matches.matches.len(),
-                search::SearchMode::FilesWithMatches => matches.files.len(),
-                search::SearchMode::Count => matches.counts.len(),
-            };
-            remaining_results = remaining_results.saturating_sub(result_count);
-            results.push(json!({"query": query, "matches": matches.matches, "files": matches.files, "counts": matches.counts, "truncated": matches.truncated, "offset": matches.offset, "next_offset": matches.next_offset}));
+        let results = batch_search(&parsed, max_results, options.mode, |query, limit| {
+            search::search(context.workspace(), query, limit, &options)
+        });
+        Ok(json!({"results": results}))
+    }
+}
+
+fn batch_search<F>(
+    queries: &[&str],
+    max_results: usize,
+    mode: search::SearchMode,
+    mut run_query: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, usize) -> Result<search::SearchOutput, SearchError>,
+{
+    let mut remaining_results = max_results;
+    let mut results = Vec::with_capacity(queries.len());
+    for (index, query) in queries.iter().enumerate() {
+        let remaining_queries = queries.len() - index;
+        let per_query_limit = remaining_results.div_ceil(remaining_queries);
+        if per_query_limit == 0 {
+            results.push(json!({
+                "query": query,
+                "matches": [],
+                "files": [],
+                "counts": [],
+                "truncated": true,
+                "offset": 0,
+                "next_offset": null,
+                "result_budget_exhausted": true
+            }));
+            continue;
         }
 
-        Ok(json!({"results": results}))
+        match run_query(query, per_query_limit) {
+            Ok(output) => {
+                let result_count = match mode {
+                    search::SearchMode::Matches => output.matches.len(),
+                    search::SearchMode::FilesWithMatches => output.files.len(),
+                    search::SearchMode::Count => output.counts.len(),
+                };
+                remaining_results = remaining_results.saturating_sub(result_count);
+                results.push(json!({"query": query, "matches": output.matches, "files": output.files, "counts": output.counts, "truncated": output.truncated, "offset": output.offset, "next_offset": output.next_offset}));
+            }
+            Err(error) => {
+                results.push(json!({
+                    "query": query,
+                    "matches": [],
+                    "files": [],
+                    "counts": [],
+                    "truncated": false,
+                    "offset": 0,
+                    "next_offset": null,
+                    "error": search_error_details(error)
+                }));
+            }
+        }
+    }
+    results
+}
+
+fn search_error_details(error: SearchError) -> Value {
+    match error {
+        SearchError::RipgrepUnavailable => json!({
+            "code": "dependency_unavailable",
+            "message": SearchError::RipgrepUnavailable.to_string()
+        }),
+        SearchError::Failed(message) => json!({
+            "code": "search_failed",
+            "message": message
+        }),
     }
 }
 
@@ -286,6 +330,60 @@ mod tests {
     fn failed_searches_stay_execution_errors() {
         let error = search_error(SearchError::Failed("boom".to_string()));
         assert_eq!(error.kind(), RuntimeErrorKind::Execution);
+    }
+
+    #[test]
+    fn batch_search_keeps_query_failures_independent_and_bounded() {
+        let mut calls = Vec::new();
+        let results = batch_search(
+            &["first", "bad-regex", "last"],
+            3,
+            search::SearchMode::Matches,
+            |query, limit| {
+                calls.push((query.to_string(), limit));
+                if query == "bad-regex" {
+                    return Err(SearchError::Failed("invalid regex".into()));
+                }
+                Ok(search::SearchOutput {
+                    matches: vec![search::SearchMatch {
+                        path: "src/lib.rs".into(),
+                        line: 1,
+                        text: query.into(),
+                    }],
+                    files: Vec::new(),
+                    counts: Vec::new(),
+                    truncated: false,
+                    offset: 0,
+                    next_offset: None,
+                })
+            },
+        );
+        assert_eq!(calls.len(), 3);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0]["matches"][0]["text"], "first");
+        assert_eq!(results[1]["error"]["code"], "search_failed");
+        assert_eq!(results[2]["matches"][0]["text"], "last");
+    }
+
+    #[test]
+    fn batch_search_marks_queries_skipped_by_the_shared_result_budget() {
+        let results = batch_search(&["one", "two"], 1, search::SearchMode::Matches, |_, _| {
+            Ok(search::SearchOutput {
+                matches: vec![search::SearchMatch {
+                    path: "src/lib.rs".into(),
+                    line: 1,
+                    text: "hit".into(),
+                }],
+                files: Vec::new(),
+                counts: Vec::new(),
+                truncated: false,
+                offset: 0,
+                next_offset: None,
+            })
+        });
+        assert_eq!(results[0]["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(results[1]["result_budget_exhausted"], true);
+        assert_eq!(results[1]["truncated"], true);
     }
 
     #[test]

@@ -29,6 +29,8 @@ stdio 协议一次处理一行 UTF-8 JSON，单行输入上限为 2 MiB。超限
 
 Search 还支持工作区相对 `scope`、literal 模式、有界 include/exclude glob，以及 `matches`、`files_with_matches`、`count` 输出模式。每次请求仍调用系统 ripgrep，不建立常驻索引。
 
+Search 可以传入单个 `query`，也可以传入 1 到 8 个 `queries`；两种形式互斥。批量查询共享整个响应的 `max_results` 上限。某一项失败时，会在对应结果中返回独立错误，其余查询仍会继续；共享结果预算耗尽后跳过的项会标记 `result_budget_exhausted`。
+
 单查询支持 `offset` 续读并返回 `next_offset`；续读时保持 query、scope、glob、mode 和结果上限不变。如果 ripgrep 原始输出触及硬上限，结果只标记 truncated，不提供伪造的 continuation。
 
 如果显式 search scope 本身是 protected path，会要求与敏感文件读取相同的一次性审批；普通工作区范围搜索仍会过滤 protected path。

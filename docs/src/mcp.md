@@ -45,7 +45,7 @@ Uses the system ripgrep binary and returns at most 200 bounded matches.
 
 ripgrep is an external runtime dependency, not a bundled one. When `rg` is missing from `PATH` the tool returns a dependency error naming ripgrep and how to install it; all other tools continue to work. Homebrew installations declare ripgrep as a formula dependency.
 
-The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
+The existing `search` tool supports either one `query` or a `queries` batch of 1 to 8 strings. The two forms are mutually exclusive. Batch queries share one `max_results` budget for the entire response rather than multiplying the limit per query. A failure for one batch query is returned beside that query and does not prevent the remaining queries from running; entries skipped after the shared result budget is exhausted are marked `result_budget_exhausted`. This reduces ChatGPT Web ↔ local MCP round trips while keeping response size and tunnel traffic bounded.
 
 Search also accepts a workspace-relative `scope`, literal mode, bounded include/exclude globs, and `matches`, `files_with_matches`, or `count` output modes. It continues to invoke the system ripgrep process per request and does not maintain an index.
 
