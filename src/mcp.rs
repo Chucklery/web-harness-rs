@@ -388,7 +388,7 @@ fn handle(
                 },
                 {
                     "name": "patch",
-                    "description": "Apply a bounded Codex-style structured patch inside the workspace.",
+                    "description": "Apply a bounded Codex-style structured patch inside the workspace, returning changed paths and per-file added/removed byte counts.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

@@ -1,5 +1,6 @@
 use crate::atomic_file;
 use crate::workspace::{Workspace, WorkspaceError};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use thiserror::Error;
@@ -31,21 +32,57 @@ enum Operation {
 struct Hunk {
     old: String,
     new: String,
+    added_bytes: usize,
+    removed_bytes: usize,
 }
 
 const MAX_PATCH_TARGET_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PATCH_OPERATIONS: usize = 256;
+
+#[derive(Debug, Serialize)]
+pub struct PatchChangeSummary {
+    pub path: String,
+    pub operation: &'static str,
+    pub added_bytes: usize,
+    pub removed_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PatchResult {
+    pub changed_paths: Vec<String>,
+    pub diff_summary: Vec<PatchChangeSummary>,
+}
 
 #[cfg(any(test, feature = "release-tools"))]
 pub fn apply(workspace: &Workspace, input: &str) -> Result<Vec<String>, PatchError> {
     apply_with_revisions(workspace, input, &HashMap::new())
 }
 
+#[cfg(any(test, feature = "release-tools"))]
 pub fn apply_with_revisions(
     workspace: &Workspace,
     input: &str,
     expected_revisions: &HashMap<String, String>,
 ) -> Result<Vec<String>, PatchError> {
+    Ok(apply_with_revisions_and_summary(workspace, input, expected_revisions)?.changed_paths)
+}
+
+pub fn apply_with_revisions_and_summary(
+    workspace: &Workspace,
+    input: &str,
+    expected_revisions: &HashMap<String, String>,
+) -> Result<PatchResult, PatchError> {
     let operations = parse(input)?;
+    for path in expected_revisions.keys() {
+        if !operations
+            .iter()
+            .any(|operation| matches!(operation, Operation::Update { path: update, .. } if update == path))
+        {
+            return Err(PatchError::Invalid(format!(
+                "expected_read_revisions contains a path without an Update operation: {path}"
+            )));
+        }
+    }
     let mut prepared = Vec::new();
     let mut created_dirs = Vec::new();
     let mut seen_paths = HashSet::new();
@@ -84,7 +121,18 @@ pub fn apply_with_revisions(
                     cleanup_dirs(&created_dirs);
                     return Err(PatchError::Conflict(path));
                 }
-                prepared.push((path, target, Some(content)));
+                let added_bytes = content.len();
+                prepared.push((
+                    path,
+                    target,
+                    Some(content),
+                    PatchChangeSummary {
+                        path: String::new(),
+                        operation: "add",
+                        added_bytes,
+                        removed_bytes: 0,
+                    },
+                ));
             }
             Operation::Update { path, hunks } => {
                 let target = match workspace.resolve(&path) {
@@ -95,7 +143,13 @@ pub fn apply_with_revisions(
                     }
                 };
                 if let Some(expected) = expected_revisions.get(&path) {
-                    let actual = workspace.read_revision(&path)?;
+                    let actual = match workspace.read_revision(&path) {
+                        Ok(actual) => actual,
+                        Err(error) => {
+                            cleanup_dirs(&created_dirs);
+                            return Err(PatchError::Workspace(error));
+                        }
+                    };
                     if expected != &actual {
                         cleanup_dirs(&created_dirs);
                         return Err(PatchError::Conflict(path));
@@ -117,6 +171,21 @@ pub fn apply_with_revisions(
                             return Err(PatchError::Workspace(error));
                         }
                     };
+                if let Some(expected) = expected_revisions.get(&path) {
+                    let actual = match workspace.read_revision(&path) {
+                        Ok(actual) => actual,
+                        Err(error) => {
+                            cleanup_dirs(&created_dirs);
+                            return Err(PatchError::Workspace(error));
+                        }
+                    };
+                    if expected != &actual {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Conflict(path));
+                    }
+                }
+                let mut added_bytes = 0usize;
+                let mut removed_bytes = 0usize;
                 for hunk in hunks {
                     let Some(index) = content.find(&hunk.old) else {
                         cleanup_dirs(&created_dirs);
@@ -129,9 +198,21 @@ pub fn apply_with_revisions(
                             "ambiguous hunk in {path}; provide more context"
                         )));
                     }
+                    removed_bytes = removed_bytes.saturating_add(hunk.removed_bytes);
+                    added_bytes = added_bytes.saturating_add(hunk.added_bytes);
                     content.replace_range(index..index + hunk.old.len(), &hunk.new);
                 }
-                prepared.push((path, target, Some(content)));
+                prepared.push((
+                    path,
+                    target,
+                    Some(content),
+                    PatchChangeSummary {
+                        path: String::new(),
+                        operation: "update",
+                        added_bytes,
+                        removed_bytes,
+                    },
+                ));
             }
             Operation::Delete { path } => {
                 let target = match workspace.resolve(&path) {
@@ -141,9 +222,31 @@ pub fn apply_with_revisions(
                         return Err(PatchError::Workspace(error));
                     }
                 };
-                prepared.push((path, target, None));
+                let removed_bytes = match fs::metadata(&target) {
+                    Ok(metadata) => metadata.len().min(usize::MAX as u64) as usize,
+                    Err(error) => {
+                        cleanup_dirs(&created_dirs);
+                        return Err(PatchError::Io(error));
+                    }
+                };
+                prepared.push((
+                    path,
+                    target,
+                    None,
+                    PatchChangeSummary {
+                        path: String::new(),
+                        operation: "delete",
+                        added_bytes: 0,
+                        removed_bytes,
+                    },
+                ));
             }
         }
+    }
+
+    if let Err(error) = check_expected_revisions(workspace, expected_revisions) {
+        cleanup_dirs(&created_dirs);
+        return Err(error);
     }
 
     // Two-phase commit: every file is staged before any target is touched, so a
@@ -151,7 +254,8 @@ pub fn apply_with_revisions(
     // rewritten. Without this a multi-file patch was only atomic per file.
     let mut staged = Vec::new();
     let mut changed = Vec::new();
-    for (relative, target, content) in prepared {
+    let mut summaries = Vec::with_capacity(prepared.len());
+    for (relative, target, content, mut summary) in prepared {
         let result = match &content {
             Some(content) => atomic_file::stage(&target, content.as_bytes(), false),
             None => atomic_file::stage_removal(&target),
@@ -159,7 +263,9 @@ pub fn apply_with_revisions(
         match result {
             Ok(entry) => {
                 staged.push(entry);
+                summary.path = relative.clone();
                 changed.push(relative);
+                summaries.push(summary);
             }
             Err(error) => {
                 for entry in staged {
@@ -169,6 +275,14 @@ pub fn apply_with_revisions(
                 return Err(PatchError::Io(error));
             }
         }
+    }
+
+    if let Err(error) = check_expected_revisions(workspace, expected_revisions) {
+        for entry in staged {
+            entry.discard();
+        }
+        cleanup_dirs(&created_dirs);
+        return Err(error);
     }
 
     let mut applied = 0usize;
@@ -183,7 +297,23 @@ pub fn apply_with_revisions(
     }
     debug_assert_eq!(applied, changed.len());
 
-    Ok(changed)
+    Ok(PatchResult {
+        changed_paths: changed,
+        diff_summary: summaries,
+    })
+}
+
+fn check_expected_revisions(
+    workspace: &Workspace,
+    expected_revisions: &HashMap<String, String>,
+) -> Result<(), PatchError> {
+    for (path, expected) in expected_revisions {
+        let actual = workspace.read_revision(path)?;
+        if &actual != expected {
+            return Err(PatchError::Conflict(path.clone()));
+        }
+    }
+    Ok(())
 }
 
 fn cleanup_dirs(created: &[std::path::PathBuf]) {
@@ -204,6 +334,11 @@ fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
     let mut operations = Vec::new();
     let mut index = 1;
     while index + 1 < lines.len() {
+        if operations.len() >= MAX_PATCH_OPERATIONS {
+            return Err(PatchError::Invalid(format!(
+                "patch may contain at most {MAX_PATCH_OPERATIONS} operations"
+            )));
+        }
         let line = lines[index];
         if let Some(path) = line.strip_prefix("*** Add File: ") {
             index += 1;
@@ -234,6 +369,8 @@ fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
                 }
                 let mut old = String::new();
                 let mut new = String::new();
+                let mut added_bytes = 0usize;
+                let mut removed_bytes = 0usize;
                 while index + 1 < lines.len()
                     && !lines[index].starts_with("@@")
                     && !lines[index].starts_with("*** ")
@@ -253,10 +390,12 @@ fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
                         "-" => {
                             old.push_str(value);
                             old.push('\n');
+                            removed_bytes = removed_bytes.saturating_add(value.len() + 1);
                         }
                         "+" => {
                             new.push_str(value);
                             new.push('\n');
+                            added_bytes = added_bytes.saturating_add(value.len() + 1);
                         }
                         _ => {
                             return Err(PatchError::Invalid(format!(
@@ -269,7 +408,12 @@ fn parse(input: &str) -> Result<Vec<Operation>, PatchError> {
                 if old.is_empty() && new.is_empty() {
                     return Err(PatchError::Invalid("empty update hunk".into()));
                 }
-                hunks.push(Hunk { old, new });
+                hunks.push(Hunk {
+                    old,
+                    new,
+                    added_bytes,
+                    removed_bytes,
+                });
             }
             operations.push(Operation::Update {
                 path: path.to_string(),
@@ -305,6 +449,55 @@ mod tests {
             "created\n"
         );
         assert!(!dir.path().join("delete.txt").exists());
+    }
+
+    #[test]
+    fn returns_bounded_change_statistics_for_each_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("update.txt"), "prefix\nold\nkeep\n").unwrap();
+        fs::write(dir.path().join("delete.txt"), "remove me\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let patch = "*** Begin Patch\n*** Update File: update.txt\n@@\n prefix\n-old\n+new value\n keep\n*** Add File: nested/add.txt\n+created\n*** Delete File: delete.txt\n*** End Patch";
+        let result = apply_with_revisions_and_summary(&workspace, patch, &HashMap::new()).unwrap();
+        assert_eq!(result.changed_paths.len(), 3);
+        assert_eq!(result.diff_summary.len(), 3);
+        let update = result
+            .diff_summary
+            .iter()
+            .find(|summary| summary.path == "update.txt")
+            .unwrap();
+        assert_eq!(update.operation, "update");
+        assert_eq!(update.added_bytes, "new value\n".len());
+        assert_eq!(update.removed_bytes, "old\n".len());
+    }
+
+    #[test]
+    fn rejects_revision_fences_without_an_update_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let patch = "*** Begin Patch\n*** Add File: new.txt\n+new\n*** End Patch";
+        let expected = HashMap::from([("new.txt".to_string(), "revision".to_string())]);
+        assert!(matches!(
+            apply_with_revisions_and_summary(&workspace, patch, &expected),
+            Err(PatchError::Invalid(_))
+        ));
+        assert!(!dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn rejects_excessive_operation_count_before_touching_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut patch = String::from("*** Begin Patch\n");
+        for index in 0..=MAX_PATCH_OPERATIONS {
+            patch.push_str(&format!("*** Add File: file-{index}.txt\n+value\n"));
+        }
+        patch.push_str("*** End Patch");
+        assert!(matches!(
+            apply_with_revisions_and_summary(&workspace, &patch, &HashMap::new()),
+            Err(PatchError::Invalid(_))
+        ));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]

@@ -42,13 +42,19 @@ impl RuntimeTool for PatchRuntime {
         }
         let expected_revisions =
             parse_expected_revisions(arguments.get("expected_read_revisions"))?;
-        let changed_paths =
-            patch::apply_with_revisions(context.workspace(), patch_text, &expected_revisions)
-                .map_err(|error| {
-                    let kind = patch_error_kind(&error);
-                    RuntimeToolError::new(kind, error.to_string())
-                })?;
-        Ok(json!({"changed_paths": changed_paths}))
+        let result = patch::apply_with_revisions_and_summary(
+            context.workspace(),
+            patch_text,
+            &expected_revisions,
+        )
+        .map_err(|error| {
+            let kind = patch_error_kind(&error);
+            RuntimeToolError::new(kind, error.to_string())
+        })?;
+        Ok(json!({
+            "changed_paths": result.changed_paths,
+            "diff_summary": result.diff_summary
+        }))
     }
 }
 
@@ -135,6 +141,25 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn returns_changed_paths_with_bounded_diff_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let result = PatchRuntime
+            .call(
+                &mut context,
+                &json!({"patch":"*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** End Patch"}),
+            )
+            .unwrap();
+        assert_eq!(result["changed_paths"][0], "nested/new.txt");
+        assert_eq!(result["diff_summary"][0]["operation"], "add");
+        assert_eq!(result["diff_summary"][0]["added_bytes"], 8);
+        assert_eq!(result["diff_summary"][0]["removed_bytes"], 0);
     }
 
     #[test]
