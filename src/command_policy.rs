@@ -84,6 +84,24 @@ pub fn command_risk(argv: &[String]) -> Option<CommandRisk> {
     }
 }
 
+/// Conservatively detects a literal Git push mentioned in a one-shot script.
+/// This only selects an extra approval prompt; sandboxing remains the boundary.
+pub fn script_may_push_git_remote(script: &str) -> bool {
+    let mut mentions_git = false;
+    let mut mentions_push = false;
+
+    for word in script.split(|character: char| !character.is_ascii_alphanumeric()) {
+        if word.is_empty() {
+            continue;
+        }
+        let word = word.to_ascii_lowercase();
+        mentions_git |= word == "git";
+        mentions_push |= word == "push";
+    }
+
+    mentions_git && mentions_push
+}
+
 fn git_subcommand(argv: &[String]) -> Option<&str> {
     let mut index = 1;
     while index < argv.len() {
@@ -238,5 +256,14 @@ mod tests {
             Some(CommandRisk::GitRemoteWrite)
         );
         assert_eq!(command_risk(&["cargo".into(), "test".into()]), None);
+    }
+
+    #[test]
+    fn script_git_push_requires_a_separate_remote_approval() {
+        assert!(script_may_push_git_remote("git push origin main"));
+        assert!(script_may_push_git_remote("/usr/bin/git -C repo push"));
+        assert!(script_may_push_git_remote("& git.exe push origin main"));
+        assert!(!script_may_push_git_remote("git status"));
+        assert!(!script_may_push_git_remote("printf push"));
     }
 }

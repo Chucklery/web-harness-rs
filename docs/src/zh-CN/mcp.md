@@ -41,7 +41,7 @@ Search 可以传入单个 `query`，也可以传入 1 到 8 个 `queries`；两�
 
 Exec 默认使用 argv 形式；需要 pipes、重定向或短命令链时，也可使用有界的一次性 `script`。argv 命令在启动前会做策略校验：对已知的 shell 与解释器（`sh`、`bash`、`python`、`ruby` 等）拒绝内联求值标志（`sh -c`、`bash -c`、`python -c`、`ruby -c`），并提示改用显式 script 或工作区内的脚本文件。script 不与 `stdin` 同时接受，且始终需要一次性审批。这是策略过滤而非安全边界——`PATH` 中仍可能存在 `env` 这类包装器——真正的边界始终是下面的 sandbox。
 
-通过 exec 直接运行的 Git 命令会在启动前分类，并复用结构化 Git 的审批 capability：`git push` 需要 `git.remote.write`，其他直接 Git 调用保守地要求 `git.local.write`。已批准的普通程序或包装器仍可能修改 sandbox 内的工作区，因此通用进程审批本身授予工作区范围内的执行权限。
+通过 exec 直接运行的 Git 命令会在启动前分类，并复用结构化 Git 的审批 capability：`git push` 需要 `git.remote.write`，其他直接 Git 调用保守地要求 `git.local.write`。Script 模式会保守检测字面上的 `git` 与 `push` token，并额外要求 `git_approval_id` 对应的 `git.remote.write` 审批；这与脚本审批及（若请求）outbound 网络审批相互独立。该文本扫描只是策略提示，不是安全边界；最终边界仍是 Host 对脚本的明确审批和 OS sandbox。已批准的普通程序或包装器仍可能修改 sandbox 内的工作区，因此通用进程审批本身授予工作区范围内的执行权限。
 
 ## list_files
 
@@ -57,7 +57,7 @@ Exec 还提供明确的 `script` 模式：Unix 使用 `sh`/`bash`，Windows 使�
 
 macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区、TMPDIR、`/tmp`、`/private/tmp` 与 `/dev/null`。`/dev/null` 需要显式放行：shell、Git 以及大多数编译器与构建工具链都会无条件打开它，否则 `git status` 这类命令会直接以 `Operation not permitted` 失败。
 
-网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并始终要求单独的 `network.outbound` 一次性审批，票据绑定确切 argv、cwd、后台模式和网络策略。如果同一命令还需要进程或 Git 审批，每种 capability 都有独立票据并由 Host 分别确认；网络票据通过 `network_approval_id` 传回，不能授权 Git mutation，Git 票据也不能授权网络访问。没有原生 sandbox backend 时会拒绝网络升级，不提供 unsandboxed 网络模式。
+网络策略按每次执行设置，默认是 `deny`。`outbound` 只增加 Seatbelt 的出站网络权限，并始终要求单独的 `network.outbound` 一次性审批，票据绑定确切 argv、cwd、后台模式和网络策略。如果同一命令还需要进程或 Git 审批，每种 capability 都有独立票据并由 Host 分别确认；网络票据通过 `network_approval_id` 传回，不能授权 Git mutation，Git 票据也不能授权网络访问。Script 模式中的 Git push 还必须提供独立的 `git_approval_id`；仅批准 outbound 网络不满足 `git.remote.write`。没有原生 sandbox backend 时会拒绝网络升级，不提供 unsandboxed 网络模式。
 
 ## patch
 

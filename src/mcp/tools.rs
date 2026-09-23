@@ -89,6 +89,7 @@ pub(super) fn list() -> Value {
                     "background": {"type": "boolean"},
                     "network": {"type": "string", "enum": ["deny", "outbound"], "default": "deny"},
                     "approval_id": {"type": "string"},
+                    "git_approval_id": {"type": "string"},
                     "network_approval_id": {"type": "string"}
                 },
                 "oneOf": [{"required": ["argv"]}, {"required": ["script"]}],
@@ -228,5 +229,7 @@ mod tests {
             assert!(tool["inputSchema"].is_object(), "{name} has no schema");
             assert!(tool["annotations"].is_object(), "{name} has no annotations");
         }
+        let exec = names.iter().find(|tool| tool["name"] == "exec").unwrap();
+        assert!(exec["inputSchema"]["properties"]["git_approval_id"].is_object());
     }
 }

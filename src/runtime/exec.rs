@@ -131,6 +131,9 @@ impl RuntimeTool for ExecRuntime {
             None if script.is_some() || !sandbox.enforced() => Some(Capability::ProcessExecute),
             None => None,
         };
+        let script_may_push_git_remote = script
+            .as_deref()
+            .is_some_and(command_policy::script_may_push_git_remote);
         let protected_read = argv.iter().skip(1).any(|argument| {
             path_policy::is_protected(argument) && context.workspace().resolve(argument).is_ok()
         });
@@ -147,7 +150,7 @@ impl RuntimeTool for ExecRuntime {
         let script_mode = script.is_some();
         let needs_command_approval =
             command_capability.is_some() || protected_read || script_mode || !sandbox.enforced();
-        let mut approvals = Vec::with_capacity(2);
+        let mut approvals = Vec::with_capacity(3);
         if needs_command_approval {
             let capability = command_capability.unwrap_or(Capability::ProcessExecute);
             let mut command_authorization = authorization.clone();
@@ -191,6 +194,30 @@ impl RuntimeTool for ExecRuntime {
                     capability,
                     summary,
                     reason,
+                ));
+            }
+        }
+
+        if script_may_push_git_remote {
+            let mut git_authorization = authorization.clone();
+            git_authorization.capability = Capability::GitRemoteWrite;
+            if let Some(approval_id) = arguments.get("git_approval_id").and_then(Value::as_str) {
+                context
+                    .permissions()
+                    .validate_exec(approval_id, &git_authorization)
+                    .map_err(|error| {
+                        RuntimeToolError::new(RuntimeErrorKind::Permission, error.to_string())
+                    })?;
+                approvals.push((approval_id.to_string(), git_authorization));
+            } else {
+                return Ok(request_approval(
+                    context,
+                    &git_authorization,
+                    "git_approval_id",
+                    Capability::GitRemoteWrite,
+                    "Allow this script to push to a Git remote".to_string(),
+                    "A Git push in script mode requires a separate git.remote.write approval"
+                        .to_string(),
                 ));
             }
         }
@@ -414,6 +441,67 @@ mod tests {
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "process.execute");
+    }
+
+    #[test]
+    fn script_git_push_requires_a_separate_remote_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+        let request = json!({"script":"printf 'git push policy probe\\n'"});
+
+        let process_approval = ExecRuntime.call(&mut context, &request).unwrap();
+        assert_eq!(process_approval["capability"], "process.execute");
+        let process_ticket = process_approval["approval"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        context.permissions().approve(&process_ticket).unwrap();
+
+        let mut retry = request.as_object().unwrap().clone();
+        retry.insert("approval_id".into(), json!(process_ticket));
+        let retry = Value::Object(retry);
+        let git_approval = ExecRuntime.call(&mut context, &retry).unwrap();
+        assert_eq!(git_approval["capability"], "git.remote.write");
+        assert_eq!(git_approval["approval_argument"], "git_approval_id");
+        let git_ticket = git_approval["approval"]["id"].as_str().unwrap().to_string();
+
+        let network_authorization = ExecAuthorization {
+            capability: Capability::NetworkOutbound,
+            argv: vec!["sh".into()],
+            cwd: None,
+            background: false,
+            network: NetworkPolicy::Deny,
+            expected_head: None,
+            stdin: Some("printf 'git push policy probe\\n'".into()),
+            protected_read: false,
+        };
+        let network_ticket = context.permissions().request_action(
+            &network_authorization,
+            "network only".into(),
+            "test".into(),
+        );
+        context.permissions().approve(&network_ticket.id).unwrap();
+        let mut mismatched_retry = retry.as_object().unwrap().clone();
+        mismatched_retry.insert("git_approval_id".into(), json!(network_ticket.id));
+        let mismatch = ExecRuntime
+            .call(&mut context, &Value::Object(mismatched_retry))
+            .unwrap_err();
+        assert_eq!(mismatch.kind(), RuntimeErrorKind::Permission);
+        context.permissions().approve(&git_ticket).unwrap();
+
+        let mut retry = retry.as_object().unwrap().clone();
+        retry.insert("git_approval_id".into(), json!(git_ticket));
+        let result = ExecRuntime
+            .call(&mut context, &Value::Object(retry))
+            .unwrap();
+        assert_eq!(result["exit_code"], 0);
+        assert!(result["stdout_tail"]
+            .as_str()
+            .unwrap()
+            .contains("git push policy probe"));
     }
 
     #[test]
