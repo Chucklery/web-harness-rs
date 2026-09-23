@@ -23,19 +23,18 @@ enum StagedKind {
 }
 
 impl Staged {
-    /// Applies the staged change to the target path.
+    /// Applies the staged change with a same-directory rename.
+    ///
+    /// This does not force data or directory metadata to stable storage. Use
+    /// [`write`] when crash durability is required.
     pub fn commit(self) -> io::Result<()> {
         match self.kind {
             StagedKind::Replace => {
-                let parent = self.target.parent().unwrap_or_else(|| Path::new("."));
                 #[cfg(windows)]
                 if self.target.exists() {
                     fs::remove_file(&self.target)?;
                 }
                 fs::rename(&self.temp_path, &self.target)?;
-                if let Ok(parent_dir) = File::open(parent) {
-                    let _ = parent_dir.sync_all();
-                }
                 Ok(())
             }
             StagedKind::Removal => fs::remove_file(&self.temp_path),
@@ -95,6 +94,10 @@ pub fn stage_removal(path: &Path) -> io::Result<Staged> {
 
 /// Writes `bytes` to a temporary file next to `path` without replacing it.
 ///
+/// The staged rename provides atomic visibility where the platform supports
+/// atomic replacement, but does not force file or directory data to stable
+/// storage. Use [`write`] when crash durability is required.
+///
 /// The returned [`Staged`] must be either committed or discarded.
 pub fn stage(path: &Path, bytes: &[u8], private: bool) -> io::Result<Staged> {
     #[cfg(not(unix))]
@@ -124,8 +127,6 @@ pub fn stage(path: &Path, bytes: &[u8], private: bool) -> io::Result<Staged> {
 
         let result = (|| {
             temp.write_all(bytes)?;
-            temp.sync_all()?;
-
             #[cfg(unix)]
             if private {
                 use std::os::unix::fs::PermissionsExt;

@@ -130,7 +130,7 @@ pub fn run(
             patch_error = Some(error.to_string());
             break;
         }
-        patch_samples.push(start.elapsed().as_micros() as u64);
+        patch_samples.push(elapsed_micros(start.elapsed()));
         alpha = !alpha;
     }
     let patch = samples_metric(patch_samples, patch_error);
@@ -156,7 +156,7 @@ pub fn run(
         let start = Instant::now();
         match manager.run_foreground(&bench_workspace, &true_argv, None, Some(2_000), sandboxed) {
             Ok(result) if result.exit_code == Some(0) => {
-                exec_samples.push(start.elapsed().as_micros() as u64)
+                exec_samples.push(elapsed_micros(start.elapsed()))
             }
             Ok(result) => {
                 exec_error = Some(format!("unexpected exit code {:?}", result.exit_code));
@@ -215,7 +215,7 @@ fn latency(mut iterations: usize, mut f: impl FnMut()) -> LatencyMetric {
     for _ in 0..iterations {
         let start = Instant::now();
         f();
-        samples.push(start.elapsed().as_micros() as u64);
+        samples.push(elapsed_micros(start.elapsed()));
     }
     metric_from_samples(samples)
 }
@@ -234,13 +234,17 @@ fn operation_metric(
                 detail: Some(error),
             };
         }
-        samples.push(start.elapsed().as_micros() as u64);
+        samples.push(elapsed_micros(start.elapsed()));
     }
     OperationMetric {
         status: "measured".into(),
         latency: Some(metric_from_samples(samples)),
         detail: None,
     }
+}
+
+fn elapsed_micros(duration: Duration) -> u64 {
+    duration.as_nanos().div_ceil(1_000).min(u64::MAX as u128) as u64
 }
 
 fn samples_metric(samples: Vec<u64>, error: Option<String>) -> OperationMetric {
@@ -398,5 +402,12 @@ mod tests {
         assert_eq!(metric.p50_us, 3);
         assert_eq!(metric.p95_us, 4);
         assert_eq!(metric.p99_us, 4);
+    }
+
+    #[test]
+    fn sub_microsecond_samples_round_up_instead_of_becoming_zero() {
+        assert_eq!(elapsed_micros(Duration::from_nanos(1)), 1);
+        assert_eq!(elapsed_micros(Duration::from_nanos(1_000)), 1);
+        assert_eq!(elapsed_micros(Duration::from_nanos(1_001)), 2);
     }
 }

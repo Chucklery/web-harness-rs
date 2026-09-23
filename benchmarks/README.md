@@ -20,9 +20,9 @@ The report records machine OS/architecture/physical memory, local operation late
 
 ## Checked-in evidence
 
-2026-09-18-intel-mac-8gb.json was collected from a physical x86_64 Mac reporting exactly 8 GiB RAM using the release binary.
+`2026-09-18-intel-mac-8gb.json` and `2026-09-23-intel-mac-8gb.json` were collected from this physical x86_64 Mac reporting exactly 8 GiB RAM using release binaries. The newer snapshot uses 10,000 iterations, measures search successfully, and records Host RSS of 1,060 KiB and MCP-ready startup of 3 ms. Its patch p95 is 568 µs. It does not include a running official tunnel client, so Tunnel + Host RSS remains unevaluated; Apple Silicon evidence is also still missing.
 
-That snapshot is partial evidence only:
+The 2026-09-18 snapshot is an earlier partial baseline:
 
 - Host idle RSS gate: measured
 - cold-start gate: measured
@@ -30,5 +30,7 @@ That snapshot is partial evidence only:
 - search latency: not measured because rg was unavailable in the runner PATH
 - Tunnel + Host RSS: not measured
 - Apple Silicon 8 GiB: not measured
+
+The 2026-09-23 snapshot also measures search and records sub-microsecond timings rounded up to 1 µs rather than truncated to zero. Its exec timing includes process spawn and exit, so it is not a measurement of MCP dispatch overhead alone.
 
 Do not use a single machine snapshot as a cross-machine performance guarantee.
