@@ -36,4 +36,6 @@ Git 使用独立 Runtime 权限策略，不经过通用 exec sandbox。只读操
 
 通过 `exec` 运行的直接 Git 命令也使用同一 capability 检查：`push` 要求 `git.remote.write`，已知内建子命令要求 `git.local.write`，未知子命令要求远端 capability，因为 Git 可能将其解析为配置的 shell alias。该分类是审批防护，不替代 OS sandbox。
 
+`env`、`xargs` 和 shell 等 opaque launcher/解释器即使在原生 sandbox 生效时，也必须获得绑定精确请求的一次性 `process.execute` 审批。请求摘要包含 argv、cwd、stdin、后台模式和网络策略；未被单独分类的普通开发命令仍由当前 OS sandbox 约束。
+
 Runtime Status 与 Tool Manifest 分别从 `ExecutionContext` 和 `RuntimeRegistry` 动态生成，不再在 MCP 层维护重复常量。MCP 模块只保留 JSON-RPC/MCP 封装、4 个 adaptive 兼容控制调用以及传输层错误码映射。

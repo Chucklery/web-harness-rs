@@ -47,7 +47,7 @@ pub fn validate_argv(argv: &[String]) -> Result<(), CommandPolicyError> {
         return Err(CommandPolicyError::HostControl(basename));
     }
 
-    if is_known_shell(path) {
+    if is_known_interpreter(path) {
         // Reject the first inline flag. Any payload after it is inert because
         // nothing is executed; this also stops the error message from echoing
         // the script the caller tried to run.
@@ -87,6 +87,32 @@ pub fn command_risk(argv: &[String]) -> Option<CommandRisk> {
         // capability because static argv inspection cannot resolve Git config.
         _ => Some(CommandRisk::GitRemoteWrite),
     }
+}
+
+/// Returns true when argv can start an interpreter or another command and
+/// therefore cannot be treated as a plain, statically inspectable program.
+/// Such calls require one-shot `process.execute` approval even when the OS
+/// sandbox is active. The exact argv and optional stdin are bound to the ticket.
+pub fn requires_explicit_execution_approval(argv: &[String]) -> bool {
+    let Some(executable) = argv.first() else {
+        return false;
+    };
+    let path = Path::new(executable);
+    let basename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(executable)
+        .strip_suffix(".exe")
+        .unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(executable)
+        })
+        .to_ascii_lowercase();
+    const LAUNCHERS: &[&str] = &[
+        "command", "env", "nice", "nohup", "timeout", "xargs", "parallel",
+    ];
+    LAUNCHERS.contains(&basename.as_str()) || is_known_interpreter(path)
 }
 
 fn is_git_builtin(subcommand: &str) -> bool {
@@ -254,18 +280,32 @@ fn git_subcommand(argv: &[String]) -> Option<&str> {
     None
 }
 
-/// Shells and interpreters whose inline-evaluation flag turns `exec` into an
-/// unrestricted command surface.
-///
-/// `exec` has no shell-string mode and its sandbox profile grants network
-/// access, so one inline flag would bypass the argv model entirely. This is a
-/// policy filter, not a security boundary: `PATH` may still contain an alias or
-/// a wrapper such as `env` or `xargs`, and macOS Seatbelt (`exec` on any other
-/// platform) remains the boundary.
-fn is_known_shell(executable: &Path) -> bool {
-    const SHELLS: &[&str] = &[
-        "ash", "bash", "busybox", "csh", "dash", "elvish", "fish", "ksh", "lua", "node", "perl",
-        "php", "pwsh", "python", "python2", "python3", "ruby", "sh", "tcsh", "zsh",
+fn is_known_interpreter(executable: &Path) -> bool {
+    const INTERPRETERS: &[&str] = &[
+        "ash",
+        "bash",
+        "busybox",
+        "cmd",
+        "csh",
+        "dash",
+        "elvish",
+        "fish",
+        "ksh",
+        "lua",
+        "node",
+        "perl",
+        "php",
+        "powershell",
+        "pwsh",
+        "python",
+        "python2",
+        "python3",
+        "ruby",
+        "ruby2",
+        "ruby3",
+        "sh",
+        "tcsh",
+        "zsh",
     ];
     let Some(raw) = executable.file_name().and_then(|value| value.to_str()) else {
         return false;
@@ -276,9 +316,7 @@ fn is_known_shell(executable: &Path) -> bool {
         .unwrap_or(&raw)
         .trim_end_matches(|character: char| character.is_ascii_digit())
         .trim_end_matches('.');
-    // `python3.13` collapses to `python`; digits only ever appear in trailing
-    // version components, so `busybox` and `pwsh` are still matched by name.
-    SHELLS.contains(&stem)
+    INTERPRETERS.contains(&stem)
 }
 
 fn is_inline_flag(argument: &str) -> bool {
@@ -372,6 +410,24 @@ mod tests {
         validate_argv(&["cargo".into(), "test".into()]).unwrap();
         validate_argv(&["/usr/bin/git".into(), "status".into()]).unwrap();
         validate_argv(&["rm".into(), "-f".into(), "target/file".into()]).unwrap();
+    }
+
+    #[test]
+    fn identifies_opaque_command_launchers_for_approval() {
+        assert!(requires_explicit_execution_approval(&[
+            "env".into(),
+            "git".into(),
+            "push".into()
+        ],));
+        assert!(requires_explicit_execution_approval(&[
+            "sh".into(),
+            "workspace-script.sh".into()
+        ],));
+        assert!(requires_explicit_execution_approval(&["sh".into()]));
+        assert!(!requires_explicit_execution_approval(&[
+            "cargo".into(),
+            "test".into()
+        ],));
     }
 
     #[test]

@@ -26,6 +26,8 @@ Child processes do not inherit the full web-harness environment. The host clears
 
 Process stdout/stderr are passed through a bounded redaction layer before being returned to the model or CLI. Tunnel acceptance wrapper output is drained with a bound but is not echoed; only validated, bounded evidence fields are returned. The redactor covers common assignment forms and bearer authorization values.
 
+Commands that can dispatch nested programs (including `env`, `xargs`, shell/interpreter executables) require one-time `process.execute` approval even inside the macOS sandbox. The approval is bound to argv, cwd, background mode, stdin, network policy, and protected-read status. This prevents these known opaque launch forms from silently bypassing approval; the sandbox remains the boundary for other arbitrary developer tools.
+
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
 For first-use convenience, interactive setup persists CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY in a user credential file. On macOS/Linux this is a web-harness-managed block in ~/.zshrc (or ZDOTDIR/.zshrc), rewritten atomically with mode 0600. On Windows it is a plaintext credentials.env file under the current user's APPDATA when available. API-key input disables terminal echo, and the API key is not copied into config.json or tunnel command arguments.

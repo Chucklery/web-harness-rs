@@ -77,7 +77,7 @@ pub(super) fn list() -> Value {
         },
         {
             "name": "exec",
-            "description": "Execute a bounded argv command or explicitly approved one-shot script in the workspace.",
+            "description": "Execute a bounded argv command in the workspace. Scripts, interpreters, and opaque command launchers require explicit one-time approval.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

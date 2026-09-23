@@ -125,10 +125,13 @@ impl RuntimeTool for ExecRuntime {
             ));
         }
 
+        let opaque_execution = command_policy::requires_explicit_execution_approval(&argv);
         let command_capability = match command_policy::command_risk(&argv) {
             Some(CommandRisk::GitLocalWrite) => Some(Capability::GitLocalWrite),
             Some(CommandRisk::GitRemoteWrite) => Some(Capability::GitRemoteWrite),
-            None if script.is_some() || !sandbox.enforced() => Some(Capability::ProcessExecute),
+            None if script.is_some() || opaque_execution || !sandbox.enforced() => {
+                Some(Capability::ProcessExecute)
+            }
             None => None,
         };
         let script_git_risk = script.as_deref().and_then(command_policy::script_git_risk);
@@ -178,6 +181,13 @@ impl RuntimeTool for ExecRuntime {
                     Capability::ProcessExecute if protected_read => (
                         "Read a protected workspace path through exec".to_string(),
                         "Protected paths require explicit one-time approval".to_string(),
+                    ),
+                    Capability::ProcessExecute if opaque_execution => (
+                        format!(
+                            "Run opaque command {}",
+                            argv.first().map(String::as_str).unwrap_or("?")
+                        ),
+                        "Command launchers and interpreter-driven commands require explicit one-time approval".to_string(),
                     ),
                     Capability::ProcessExecute => (
                         format!("Run {}", argv.first().map(String::as_str).unwrap_or("?")),
@@ -393,6 +403,26 @@ mod tests {
             .unwrap();
         assert_eq!(alias["status"], "approval_required");
         assert_eq!(alias["capability"], "git.remote.write");
+    }
+
+    #[test]
+    fn opaque_command_launchers_require_exact_process_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
+
+        for request in [
+            json!({"argv": ["env", "git", "push"]}),
+            json!({"argv": ["sh", "workspace-script.sh"]}),
+            json!({"argv": ["sh"], "stdin": "git push origin HEAD"}),
+        ] {
+            let approval = ExecRuntime.call(&mut context, &request).unwrap();
+            assert_eq!(approval["status"], "approval_required");
+            assert_eq!(approval["capability"], "process.execute");
+            assert_eq!(approval["approval_argument"], "approval_id");
+        }
     }
 
     #[test]

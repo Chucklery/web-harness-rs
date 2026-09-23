@@ -172,6 +172,81 @@ fn adaptive_runtime_control_tools_are_callable() {
 
 #[cfg(unix)]
 #[test]
+fn opaque_exec_launcher_requires_host_approval_before_spawn() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-exist");
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"capabilities":{"elicitation":{"form":{}}}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let _: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"exec","arguments":{
+                "argv":["env","sh","-c",format!("touch {}", marker.display())]
+            }}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(approval["method"], "elicitation/create");
+    assert!(approval["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("opaque command"));
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":approval["id"],
+            "result":{"action":"decline"}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let response: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(response["id"], 2);
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let denied: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(denied["status"], "denied");
+    assert!(!marker.exists(), "declined command must never spawn");
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[cfg(unix)]
+#[test]
 fn stdio_mcp_batches_search_queries_with_one_result_budget() {
     let binary = env!("CARGO_BIN_EXE_web-harness");
     let dir = tempfile::tempdir().unwrap();

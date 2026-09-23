@@ -67,6 +67,8 @@ Git has its own runtime policy and never routes through the generic exec sandbox
 
 Direct Git commands through `exec` share the Git capability checks: `push` requires `git.remote.write`, known built-ins require `git.local.write`, and unknown subcommands require the remote capability because Git may resolve them as configured shell aliases. This classification is an approval guard, not a substitute for the OS sandbox.
 
+Opaque launchers and interpreters such as `env`, `xargs`, and shell executables require an exact one-time `process.execute` approval even when a native sandbox is active. The request digest includes argv, cwd, stdin, background mode, and network policy; ordinary developer commands continue to rely on the selected OS sandbox unless their risk is separately classified.
+
 Runtime status and tool manifest are derived from `ExecutionContext` and `RuntimeRegistry` rather than duplicate MCP constants. The MCP module is therefore limited to JSON-RPC/MCP envelopes, the four adaptive compatibility control calls, and transport-specific error-code mapping.
 
 ## Why a small local surface
