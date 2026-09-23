@@ -422,7 +422,7 @@ fn handle(
                 },
                 {
                     "name": "job",
-                    "description": "Poll, read output, or cancel a background job.",
+                    "description": "Poll, wait for, read output from, list, or cancel a background job. wait returns incremental stdout and stderr together.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -430,7 +430,9 @@ fn handle(
                             "id": {"type": "string"},
                             "stream": {"type": "string", "enum": ["stdout", "stderr"]},
                             "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000},
-                            "cursor": {"type": "integer", "minimum": 0}
+                            "cursor": {"type": "integer", "minimum": 0},
+                            "stdout_cursor": {"type": "integer", "minimum": 0},
+                            "stderr_cursor": {"type": "integer", "minimum": 0}
                         },
                         "required": ["action"],
                         "additionalProperties": false

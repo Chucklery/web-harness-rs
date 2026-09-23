@@ -81,7 +81,7 @@ Exec optionally accepts one-shot UTF-8 `stdin` input up to 64 KiB. The input is 
 
 ## job
 
-Polls, waits for, lists, cancels, or reads bounded stdout/stderr tails from background jobs. The output action accepts a byte cursor for incremental reads and returns the next cursor. The host drains child pipes continuously but retains each stream in a bounded in-memory ring buffer; a cursor older than the retained window is reported as truncated. Owned process groups are terminated when the host exits.
+Polls, waits for, lists, cancels, or reads bounded stdout/stderr tails from background jobs. `wait` accepts separate `stdout_cursor` and `stderr_cursor` values and returns the status plus new output from both streams in one call. The `output` action accepts a byte cursor for a single stream and returns the next cursor. The host drains child pipes continuously but retains each stream in a bounded in-memory ring buffer; a cursor older than the retained window is reported as truncated. Owned process groups are terminated when the host exits.
 
 ## git
 

@@ -57,6 +57,13 @@ pub struct JobOutputChunk {
     pub truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct JobWaitResult {
+    pub status: JobStatus,
+    pub stdout: JobOutputChunk,
+    pub stderr: JobOutputChunk,
+}
+
 struct Job {
     child: Child,
     artifacts: OutputArtifacts,
@@ -328,6 +335,23 @@ impl JobManager {
         }
     }
 
+    pub fn wait_with_output(
+        &mut self,
+        id: &str,
+        timeout_ms: Option<u64>,
+        stdout_cursor: u64,
+        stderr_cursor: u64,
+    ) -> Result<JobWaitResult, JobError> {
+        let status = self.wait(id, timeout_ms)?;
+        let stdout = self.output_from(id, "stdout", stdout_cursor)?;
+        let stderr = self.output_from(id, "stderr", stderr_cursor)?;
+        Ok(JobWaitResult {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
     pub fn list(&mut self) -> Vec<JobStatus> {
         self.refresh();
         let mut statuses = self
@@ -516,6 +540,44 @@ mod tests {
         assert_eq!(chunk.next_cursor, 6);
         assert!(!chunk.truncated);
         assert_eq!(manager.list().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_returns_incremental_stdout_and_stderr_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path()).unwrap();
+        fs::write(
+            dir.path().join("emit.sh"),
+            "#!/bin/sh\nprintf 'out-one'\nprintf 'err-one' >&2\n",
+        )
+        .unwrap();
+        let mut manager = JobManager::new();
+        let started = manager
+            .start(&ws, &["sh".into(), "emit.sh".into()], None, false)
+            .unwrap();
+
+        let first = manager
+            .wait_with_output(&started.id, Some(2_000), 0, 0)
+            .unwrap();
+        assert_eq!(first.status.state, "exited");
+        assert_eq!(first.stdout.text, "out-one");
+        assert_eq!(first.stderr.text, "err-one");
+        assert_eq!(first.stdout.next_cursor, 7);
+        assert_eq!(first.stderr.next_cursor, 7);
+        assert!(!first.stdout.truncated);
+        assert!(!first.stderr.truncated);
+
+        let second = manager
+            .wait_with_output(
+                &started.id,
+                Some(1),
+                first.stdout.next_cursor,
+                first.stderr.next_cursor,
+            )
+            .unwrap();
+        assert_eq!(second.stdout.text, "");
+        assert_eq!(second.stderr.text, "");
     }
 
     #[cfg(unix)]
