@@ -14,11 +14,15 @@ const SECRET_KEYS: &[&str] = &[
 ];
 
 pub fn text(input: &str) -> String {
-    input
+    let mut output = input
         .lines()
         .map(redact_line)
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if input.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 fn redact_line(line: &str) -> String {
@@ -82,6 +86,14 @@ mod tests {
         assert!(!output.contains("hello"));
         assert!(!output.contains("topsecret"));
         assert!(output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn preserves_trailing_newlines_in_redacted_output() {
+        assert_eq!(text("plain\n"), "plain\n");
+        assert_eq!(text("TOKEN=secret\n"), "TOKEN=[REDACTED]\n");
+        assert_eq!(text("first\n\n"), "first\n\n");
+        assert_eq!(text("unterminated"), "unterminated");
     }
 
     #[test]

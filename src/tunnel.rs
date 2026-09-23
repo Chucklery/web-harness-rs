@@ -329,6 +329,10 @@ fn local_fixture_roundtrip() -> Result<(), TunnelError> {
     let fixture = FixtureDirectory { path };
     fs::write(fixture.path.join("AGENTS.md"), "Use bounded tools.\n")?;
     fs::write(fixture.path.join("hello.txt"), "needle\n")?;
+    fs::write(
+        fixture.path.join("job-output.sh"),
+        "#!/bin/sh\nprintf 'out-first\\n'\nprintf 'err-first\\n' >&2\n",
+    )?;
     let git_status = Command::new("git")
         .args(["init", "-q"])
         .current_dir(&fixture.path)
@@ -392,15 +396,49 @@ fn local_fixture_roundtrip() -> Result<(), TunnelError> {
     client.call_tool("exec", json!({"argv":["git","status","--short"]}))?;
     let job = client.call_tool(
         "exec",
-        json!({"argv":["git","status","--short"],"background":true}),
+        json!({"argv":["sh","job-output.sh"],"background":true}),
     )?;
     let job_id = job["id"]
         .as_str()
-        .ok_or_else(|| TunnelError::Local("fixture background job id missing".into()))?;
-    client.call_tool(
+        .ok_or_else(|| TunnelError::Local("fixture background job id missing".into()))?
+        .to_string();
+    let waited = client.call_tool(
         "job",
-        json!({"action":"wait","id":job_id,"timeout_ms":5000}),
+        json!({
+            "action":"wait",
+            "id":job_id,
+            "timeout_ms":5000,
+            "stdout_cursor":0,
+            "stderr_cursor":0
+        }),
     )?;
+    if waited["status"]["state"] != "exited"
+        || waited["stdout"]["text"] != "out-first\n"
+        || waited["stderr"]["text"] != "err-first\n"
+        || waited["stdout"]["next_cursor"] != 10
+        || waited["stderr"]["next_cursor"] != 10
+        || waited["stdout"]["truncated"] != false
+        || waited["stderr"]["truncated"] != false
+    {
+        return Err(TunnelError::Local(format!(
+            "fixture job wait returned unexpected output: {waited}"
+        )));
+    }
+    let waited_again = client.call_tool(
+        "job",
+        json!({
+            "action":"wait",
+            "id":job_id,
+            "timeout_ms":1000,
+            "stdout_cursor":waited["stdout"]["next_cursor"],
+            "stderr_cursor":waited["stderr"]["next_cursor"]
+        }),
+    )?;
+    if waited_again["stdout"]["text"] != "" || waited_again["stderr"]["text"] != "" {
+        return Err(TunnelError::Local(
+            "fixture job cursor repeated previously returned output".into(),
+        ));
+    }
     client.call_tool(
         "job",
         json!({"action":"output","id":job_id,"stream":"stdout"}),
