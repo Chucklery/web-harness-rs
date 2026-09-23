@@ -75,7 +75,7 @@ Patch 支持有界的 Add、Update 和 Delete，单次最多 256 个操作。路
 
 一次性审批由 MCP Host 独占。当初始化后的客户端声明支持 elicitation 时，web-harness 会发送 `elicitation/create` 和有界确认表单，只有客户端返回接受后才执行。审批票据不会作为可调用 MCP 工具暴露，因此模型不能批准自己的请求，也不能通过 `call_runtime_tool` 绕过 Host。
 
-不支持 elicitation 的客户端会收到 `approval_required`，需要 Host 侧确认；web-harness 不会静默执行。若 Host 没有确认流程，可在另一个本地终端运行 `web-harness approvals` 查看待批准请求，再运行 `web-harness approve <ticket-id>`；CLI 会显示 capability 和摘要，并要求交互式输入 `y`。票据及请求 digest 仍只保存在 MCP 进程内存；有界私有状态目录只保存短时摘要和一次性 CLI 批准标记。CLI 拒绝非交互 stdin/stdout，且不会作为 MCP 工具暴露。票据五分钟过期，并在一次成功授权后消费。
+不支持 elicitation 的客户端会收到 `approval_required`，需要 Host 侧确认；web-harness 不会静默执行。若 Host 没有确认流程，用户必须在 MCP `exec` 之外另开本地终端，运行 `web-harness approvals` 查看待批准请求，再运行 `web-harness approve <ticket-id>`。CLI 会显示 capability 和摘要，并要求交互式输入 `y`。不能通过 MCP `exec` 运行该命令来批准：macOS 上审批状态目录刻意位于子进程 sandbox 可写范围之外；其他系统上，通过工具执行命令本身也需要审批。票据及请求 digest 仍只保存在 MCP 进程内存；有界私有状态目录只保存短时摘要和一次性 CLI 批准标记。CLI 拒绝非交互 stdin/stdout，且不会作为 MCP 工具暴露。票据五分钟过期，并在一次成功授权后消费。
 
 审批等待期间，elicitation `decline` 会返回 denied；elicitation `cancel` 或针对当前 `tools/call` 的 `notifications/cancelled` 会放弃该调用、不发送响应，并撤销本次调用待处理及此前已收集的票据。目前只有 Host 审批等待阶段能观察 MCP 取消；已经开始的同步工具执行尚不能协作式中断，但仍受工具自身超时约束。此行为仍需通过真实 ChatGPT 客户端验证。
 
