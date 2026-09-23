@@ -5,10 +5,12 @@ use crate::runtime::{
     RuntimeToolError,
 };
 use crate::workspace::Workspace;
+use approval::{HostDecision, Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
+mod approval;
 mod tools;
 
 const MAX_PROTOCOL_LINE_BYTES: usize = 2 * 1024 * 1024;
@@ -22,18 +24,12 @@ struct Request {
     params: Value,
 }
 
-#[derive(Default)]
-struct Session {
-    next_server_request_id: u64,
-    elicitation_supported: bool,
-}
-
 #[derive(Debug, Serialize)]
-struct Response {
+pub(super) struct Response {
     jsonrpc: &'static str,
-    id: Option<Value>,
+    pub(super) id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
+    pub(super) result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<Value>,
 }
@@ -42,15 +38,20 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let mut stdout = io::stdout().lock();
+    serve(&workspace, &mut stdin, &mut stdout)
+}
+
+fn serve<R: BufRead, W: Write>(
+    workspace: &Workspace,
+    stdin: &mut R,
+    stdout: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut jobs = JobManager::new();
     let mut permissions = PermissionEngine::new()?;
     let runtime = RuntimeRegistry::default();
-    let mut session = Session {
-        next_server_request_id: 1,
-        ..Session::default()
-    };
+    let mut session = Session::new();
     loop {
-        let line = match read_bounded_line(&mut stdin) {
+        let line = match read_bounded_line(stdin) {
             Ok(Some(line)) => line,
             Ok(None) => break,
             Err(error) => {
@@ -60,8 +61,8 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
                     result: None,
                     error: Some(json!({"code": -32700, "message": error.to_string()})),
                 };
-                serde_json::to_writer(&mut stdout, &response)?;
-                writeln!(&mut stdout)?;
+                serde_json::to_writer(&mut *stdout, &response)?;
+                writeln!(stdout)?;
                 stdout.flush()?;
                 continue;
             }
@@ -81,158 +82,89 @@ pub fn serve_stdio(workspace: Workspace) -> Result<(), Box<dyn std::error::Error
                     result: None,
                     error: Some(json!({"code": -32700, "message": error.to_string()})),
                 };
-                serde_json::to_writer(&mut stdout, &response)?;
-                writeln!(&mut stdout)?;
+                serde_json::to_writer(&mut *stdout, &response)?;
+                writeln!(stdout)?;
                 stdout.flush()?;
                 continue;
             }
         };
         if request.method == "initialize" {
-            session.elicitation_supported = request
-                .params
-                .get("capabilities")
-                .and_then(|capabilities| capabilities.get("elicitation"))
-                .is_some_and(Value::is_object);
+            session.note_initialize(&request.params);
         }
         let mut response = handle(
             request.clone(),
-            &workspace,
+            workspace,
             &mut jobs,
             &mut permissions,
             &runtime,
         );
         let mut retry = request.clone();
-        while session.elicitation_supported
-            && request.method == "tools/call"
-            && is_approval_required(&response)
-        {
-            if let Some(approval_id) = response
-                .result
-                .as_ref()
-                .and_then(|result| result.get("structuredContent"))
-                .and_then(|value| value.get("approval"))
-                .and_then(|approval| approval.get("id"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-            {
-                let approval_argument = response
-                    .result
-                    .as_ref()
-                    .and_then(|result| result.get("structuredContent"))
-                    .and_then(|value| value.get("approval_argument"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("approval_id")
-                    .to_string();
-                match request_host_approval(&mut stdin, &mut stdout, &mut session, &response)? {
-                    Some(true) => {
-                        permissions.approve(&approval_id)?;
-                        let arguments = retry
-                            .params
-                            .get_mut("arguments")
-                            .and_then(Value::as_object_mut)
-                            .ok_or("tools/call arguments must be an object")?;
-                        arguments.insert(approval_argument, Value::String(approval_id));
-                        response = handle(
-                            retry.clone(),
-                            &workspace,
-                            &mut jobs,
-                            &mut permissions,
-                            &runtime,
-                        );
-                    }
-                    Some(false) => {
-                        permissions.deny(&approval_id)?;
-                        response = denied_response(&response);
-                        break;
-                    }
-                    None => break,
-                }
-            } else {
+        let mut suppress_response = false;
+        while session.supports_elicitation() && request.method == "tools/call" {
+            let Some(pending) = approval::pending_approval(&response) else {
                 break;
+            };
+            match approval::request_host_approval(
+                stdin,
+                stdout,
+                &mut session,
+                &response,
+                request.id.as_ref(),
+            )? {
+                HostDecision::Accept => {
+                    permissions.approve(&pending.id)?;
+                    let arguments = retry
+                        .params
+                        .get_mut("arguments")
+                        .and_then(Value::as_object_mut)
+                        .ok_or("tools/call arguments must be an object")?;
+                    arguments.insert(pending.argument, Value::String(pending.id));
+                    response = handle(
+                        retry.clone(),
+                        workspace,
+                        &mut jobs,
+                        &mut permissions,
+                        &runtime,
+                    );
+                }
+                HostDecision::Decline => {
+                    revoke_request_approvals(&mut permissions, &retry, &pending.id);
+                    response = denied_response(&response);
+                    break;
+                }
+                HostDecision::Cancel => {
+                    revoke_request_approvals(&mut permissions, &retry, &pending.id);
+                    suppress_response = true;
+                    break;
+                }
+                HostDecision::Disconnected => break,
             }
         }
-        serde_json::to_writer(&mut stdout, &response)?;
-        writeln!(&mut stdout)?;
+        if suppress_response {
+            continue;
+        }
+        serde_json::to_writer(&mut *stdout, &response)?;
+        writeln!(stdout)?;
         stdout.flush()?;
     }
     Ok(())
 }
 
-fn is_approval_required(response: &Response) -> bool {
-    response
-        .result
-        .as_ref()
-        .and_then(|result| result.get("structuredContent"))
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str)
-        == Some("approval_required")
-}
-
-fn request_host_approval<R: BufRead, W: Write>(
-    stdin: &mut R,
-    stdout: &mut W,
-    session: &mut Session,
-    response: &Response,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    let structured = response
-        .result
-        .as_ref()
-        .and_then(|result| result.get("structuredContent"))
-        .ok_or("approval response is missing structured content")?;
-    let message = structured
-        .get("approval")
-        .and_then(|approval| approval.get("summary"))
-        .and_then(Value::as_str)
-        .unwrap_or("Confirm this protected operation");
-    let request_id = format!("web_harness_elicitation_{}", session.next_server_request_id);
-    session.next_server_request_id = session.next_server_request_id.saturating_add(1);
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "elicitation/create",
-        "params": {
-            "mode": "form",
-            "message": message,
-            "requestedSchema": {
-                "type": "object",
-                "properties": {
-                    "approved": {"type": "boolean", "description": "Approve this one-time operation"}
-                },
-                "required": ["approved"],
-                "additionalProperties": false
+fn revoke_request_approvals(
+    permissions: &mut PermissionEngine,
+    request: &Request,
+    current_ticket: &str,
+) {
+    let mut ticket_ids = vec![current_ticket.to_string()];
+    if let Some(arguments) = request.params.get("arguments").and_then(Value::as_object) {
+        for argument in ["approval_id", "git_approval_id", "network_approval_id"] {
+            if let Some(ticket_id) = arguments.get(argument).and_then(Value::as_str) {
+                ticket_ids.push(ticket_id.to_string());
             }
         }
-    });
-    serde_json::to_writer(&mut *stdout, &request)?;
-    writeln!(stdout)?;
-    stdout.flush()?;
-
-    loop {
-        let line = match read_bounded_line(stdin) {
-            Ok(Some(line)) => line,
-            Ok(None) => return Ok(None),
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        if value.get("id") != Some(&json!(request_id)) {
-            continue;
-        }
-        let Some(result) = value.get("result") else {
-            return Ok(Some(false));
-        };
-        if result.get("action").and_then(Value::as_str) == Some("accept") {
-            return Ok(Some(
-                result
-                    .get("content")
-                    .and_then(|content| content.get("approved"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            ));
-        }
-        return Ok(Some(false));
+    }
+    for ticket_id in ticket_ids {
+        let _ = permissions.deny(&ticket_id);
     }
 }
 
@@ -554,5 +486,129 @@ mod tests {
         assert_eq!(payload["code"], -32010);
         assert!(payload.get("reason_code").is_none());
         assert!(payload.get("retryable").is_none());
+    }
+
+    #[test]
+    fn cancellation_revokes_all_tickets_collected_for_the_request() {
+        let mut permissions = PermissionEngine::new().unwrap();
+        let mut ticket_ids = Vec::new();
+        for capability in [
+            crate::permission::Capability::ProcessExecute,
+            crate::permission::Capability::GitLocalWrite,
+            crate::permission::Capability::NetworkOutbound,
+        ] {
+            let ticket = permissions.request_action(
+                &crate::permission::ExecAuthorization {
+                    capability,
+                    argv: vec!["sh".into()],
+                    cwd: None,
+                    background: false,
+                    network: crate::sandbox::NetworkPolicy::Deny,
+                    expected_head: None,
+                    stdin: Some("git add file".into()),
+                    protected_read: false,
+                },
+                "test approval".into(),
+                "test".into(),
+            );
+            ticket_ids.push(ticket.id);
+        }
+        let request = Request {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(12)),
+            method: "tools/call".into(),
+            params: json!({"arguments": {
+                "approval_id": ticket_ids[0],
+                "git_approval_id": ticket_ids[1]
+            }}),
+        };
+
+        revoke_request_approvals(&mut permissions, &request, &ticket_ids[2]);
+
+        for ticket_id in ticket_ids {
+            assert!(permissions.deny(&ticket_id).is_err());
+        }
+    }
+
+    #[test]
+    fn cancelled_approval_wait_suppresses_call_response_and_resumes_stdio() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let requests = [
+            json!({
+                "jsonrpc":"2.0", "id":1, "method":"initialize",
+                "params":{"capabilities":{"elicitation":{}}}
+            }),
+            json!({
+                "jsonrpc":"2.0", "id":2, "method":"tools/call",
+                "params":{"name":"exec", "arguments":{"script":"printf cancelled"}}
+            }),
+            json!({
+                "jsonrpc":"2.0", "method":"notifications/cancelled",
+                "params":{"requestId":2, "reason":"user cancelled"}
+            }),
+            json!({"jsonrpc":"2.0", "id":3, "method":"tools/list"}),
+        ];
+        let input = requests
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut input = Cursor::new(format!("{input}\n"));
+        let mut output = Vec::new();
+
+        serve(&workspace, &mut input, &mut output).unwrap();
+
+        let responses = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 3);
+        assert_eq!(responses[0]["id"], 1);
+        assert_eq!(responses[1]["method"], "elicitation/create");
+        assert_eq!(responses[2]["id"], 3);
+        assert!(responses.iter().all(|response| response["id"] != 2));
+    }
+
+    #[test]
+    fn declined_approval_returns_a_denied_tool_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        let requests = [
+            json!({
+                "jsonrpc":"2.0", "id":1, "method":"initialize",
+                "params":{"capabilities":{"elicitation":{}}}
+            }),
+            json!({
+                "jsonrpc":"2.0", "id":2, "method":"tools/call",
+                "params":{"name":"exec", "arguments":{"script":"printf declined"}}
+            }),
+            json!({
+                "jsonrpc":"2.0", "id":"web_harness_elicitation_1",
+                "result":{"action":"decline"}
+            }),
+        ];
+        let input = requests
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut input = Cursor::new(format!("{input}\n"));
+        let mut output = Vec::new();
+
+        serve(&workspace, &mut input, &mut output).unwrap();
+
+        let responses = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 3);
+        assert_eq!(responses[2]["id"], 2);
+        assert_eq!(
+            responses[2]["result"]["structuredContent"]["status"],
+            "denied"
+        );
     }
 }

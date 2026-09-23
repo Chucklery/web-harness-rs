@@ -125,4 +125,6 @@ One-time approvals are host-only. When the initialized MCP client advertises eli
 
 Clients without elicitation support receive `approval_required` and must wait for a host-side approval mechanism; web-harness does not silently execute the operation. Tickets expire after five minutes and are consumed after one successful authorization.
 
+During an approval prompt, an elicitation `decline` returns a denied result; an elicitation `cancel` or `notifications/cancelled` for the active `tools/call` abandons that call without a response and revokes its pending and previously collected tickets. Cancellation is currently observed while waiting for Host approval; synchronous tool execution already in progress is not cooperatively interrupted and remains bounded by the tool's own timeout. This behavior still needs verification with a real ChatGPT client.
+
 The same ticket cannot be reused for a different command or Git operation. A ticket that fails to match the request is *not* consumed. Denial removes the ticket explicitly.

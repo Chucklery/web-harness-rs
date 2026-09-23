@@ -77,6 +77,8 @@ Patch 支持有界的 Add、Update 和 Delete，单次最多 256 个操作。路
 
 不支持 elicitation 的客户端会收到 `approval_required`，需要等待 Host 侧审批机制；web-harness 不会静默执行。票据绑定精确请求，五分钟过期，并在一次成功授权后消费。
 
+审批等待期间，elicitation `decline` 会返回 denied；elicitation `cancel` 或针对当前 `tools/call` 的 `notifications/cancelled` 会放弃该调用、不发送响应，并撤销本次调用待处理及此前已收集的票据。目前只有 Host 审批等待阶段能观察 MCP 取消；已经开始的同步工具执行尚不能协作式中断，但仍受工具自身超时约束。此行为仍需通过真实 ChatGPT 客户端验证。
+
 票据不匹配时不会被消费；拒绝会显式删除票据。
 
 兼容控制接口不会引入第二个 Agent，它们只调用现有受限 Runtime。
