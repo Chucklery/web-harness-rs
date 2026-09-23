@@ -63,7 +63,7 @@ macOS 下优先使用原生 Seatbelt。Sandbox profile 只允许写入工作区�
 
 Patch 支持有界的 Add、Update 和 Delete，单次最多 256 个操作。路径始终受工作区边界保护；Add 会在边界检查后创建缺失的父目录，准备阶段失败会清理新建的空目录。结果返回变更路径及每个文件的增加/删除字节数。可通过 `expected_read_revisions` 为 Update 提供读取版本 fence；读取和暂存后、提交前都会复核版本，检测到变化时拒绝覆盖。
 
-结构化 Git 的 `diff` 支持通过 `offset`/`limit` 返回有界的文件与 hunk 分页，并在结果中给出可复制的 `next_offset`；续读时保持其余 diff 参数不变。`show_file` 按行读取指定 revision 中的一个工作区文件，每页最多 256 KiB，并在存在下一页时返回 `next_start_line`。每次调用最多从 Git blob 捕获 8 MiB；源文件更大时会标记 `source_truncated`，不提供不安全的续读位置。Git 还支持创建并切换分支，以及携带 `expected_head` 的 mutation；审批完成并在执行前会再次核验 HEAD，分支在审批期间变化时返回 Conflict。Commit 可携带 pathspec，避免把范围之外已有的暂存内容一并提交。
+结构化 Git 的 `diff` 支持通过 `offset`/`limit` 返回有界的文件与 hunk 分页，并在结果中给出可复制的 `next_offset`；续读时保持其余 diff 参数不变。返回 diff 正文前，Host 会通过独立且有界的 Git 查询扫描变更路径名；若包含受保护路径，则整个受保护路径集合会绑定到一次性 Host 审批，审批前不会返回 diff 内容。`show_file` 按行读取指定 revision 中的一个工作区文件，每页最多 256 KiB，并在存在下一页时返回 `next_start_line`；受保护路径同样需要审批。每次调用最多从 Git blob 捕获 8 MiB；源文件更大时会标记 `source_truncated`，不提供不安全的续读位置。Git 还支持创建并切换分支，以及携带 `expected_head` 的 mutation；审批完成并在执行前会再次核验 HEAD，分支在审批期间变化时返回 Conflict。Commit 可携带 pathspec，避免把范围之外已有的暂存内容一并提交。
 
 ## 错误
 

@@ -65,24 +65,39 @@ impl RuntimeTool for GitRuntime {
 
         match risk {
             GitRisk::ReadOnly => {
-                let protected_read = action == "show_file"
-                    && pathspec.first().is_some_and(path_policy::is_protected);
-                if protected_read {
-                    let path = pathspec.first().expect("protected_read has a path");
-                    let revision = arguments
-                        .get("revision")
-                        .and_then(Value::as_str)
-                        .unwrap_or("HEAD");
-                    let authorization = protected::authorization(
-                        vec!["git".into(), "show".into(), format!("{revision}:{path}")],
-                        true,
-                    );
+                let protected_paths = match action {
+                    "diff" => git::protected_diff_paths(context.workspace(), staged, &pathspec)
+                        .map_err(git_error)?,
+                    "show_file" if pathspec.first().is_some_and(path_policy::is_protected) => {
+                        pathspec.clone()
+                    }
+                    _ => Vec::new(),
+                };
+                if !protected_paths.is_empty() {
+                    let argv = if action == "diff" {
+                        let mut argv = git::diff_authorization_argv(staged, &pathspec);
+                        argv.push("--protected-paths".into());
+                        argv.extend(protected_paths.iter().cloned());
+                        argv
+                    } else {
+                        let path = pathspec.first().expect("protected_read has a path");
+                        let revision = arguments
+                            .get("revision")
+                            .and_then(Value::as_str)
+                            .unwrap_or("HEAD");
+                        vec!["git".into(), "show".into(), format!("{revision}:{path}")]
+                    };
+                    let authorization = protected::authorization(argv, true);
                     if let Some(pending) = protected::authorize_or_request(
                         context,
                         arguments.get("approval_id").and_then(Value::as_str),
                         &authorization,
-                        "Read a protected Git revision file",
-                        std::slice::from_ref(path),
+                        if action == "diff" {
+                            "Read protected files in a Git diff"
+                        } else {
+                            "Read a protected Git revision file"
+                        },
+                        &protected_paths,
                     )? {
                         return Ok(pending);
                     }
@@ -339,6 +354,10 @@ fn permission_error(error: crate::permission::PermissionError) -> RuntimeToolErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jobs::JobManager;
+    use crate::permission::PermissionEngine;
+    use std::fs;
+    use std::process::Command;
 
     #[test]
     fn git_actions_have_explicit_risk_classes() {
@@ -354,6 +373,56 @@ mod tests {
     fn malformed_pathspec_is_rejected() {
         let error = parse_pathspec(&json!({"pathspec": ["ok", 3]})).unwrap_err();
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+    }
+
+    #[test]
+    fn diff_requires_host_approval_before_returning_protected_content() {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(dir.path().join(".env"), "TOKEN=old-secret\n").unwrap();
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        crate::git::add(&workspace, &[".env".into()]).unwrap();
+        crate::git::commit(&workspace, "add protected file", &[]).unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=new-secret\n").unwrap();
+
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+        let request = json!({"action":"diff"});
+        let pending = GitRuntime
+            .call(
+                &mut ExecutionContext::new(&workspace, &mut jobs, &mut permissions),
+                &request,
+            )
+            .unwrap();
+        assert_eq!(pending["status"], "approval_required");
+        assert_eq!(pending["protected_paths"], json!([".env"]));
+        assert!(!pending.to_string().contains("new-secret"));
+
+        let approval_id = pending["approval"]["id"].as_str().unwrap().to_string();
+        permissions.approve(&approval_id).unwrap();
+        let mut approved_request = request.as_object().unwrap().clone();
+        approved_request.insert("approval_id".into(), Value::String(approval_id));
+        let result = GitRuntime
+            .call(
+                &mut ExecutionContext::new(&workspace, &mut jobs, &mut permissions),
+                &Value::Object(approved_request),
+            )
+            .unwrap();
+        assert!(result["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("+TOKEN=[REDACTED]"));
     }
 
     #[test]

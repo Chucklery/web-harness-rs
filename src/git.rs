@@ -1,5 +1,6 @@
 use crate::command_output;
 use crate::env;
+use crate::path_policy;
 use crate::redact;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
@@ -71,6 +72,51 @@ pub fn diff(
     pathspec: &[String],
 ) -> Result<GitResult, GitError> {
     validate_pathspec(workspace, pathspec, false)?;
+    run_owned(workspace, &diff_args(staged, pathspec))
+}
+
+/// Return changed protected paths without reading or returning their contents.
+pub fn protected_diff_paths(
+    workspace: &Workspace,
+    staged: bool,
+    pathspec: &[String],
+) -> Result<Vec<String>, GitError> {
+    validate_pathspec(workspace, pathspec, false)?;
+    let mut args = vec![
+        "diff".to_string(),
+        "--name-only".to_string(),
+        "--no-color".to_string(),
+        "-z".to_string(),
+    ];
+    if staged {
+        args.push("--cached".into());
+    }
+    if !pathspec.is_empty() {
+        args.push("--".into());
+        args.extend(pathspec.iter().cloned());
+    }
+    let result = run_owned(workspace, &args)?;
+    if result.stdout_truncated {
+        return Err(GitError::Limit(
+            "changed Git path scan reached its output limit".into(),
+        ));
+    }
+    Ok(result
+        .stdout
+        .split('\0')
+        .filter(|path| !path.is_empty() && path_policy::is_protected(path))
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+/// Canonical command payload used both for diff execution and approval binding.
+pub fn diff_authorization_argv(staged: bool, pathspec: &[String]) -> Vec<String> {
+    let mut argv = vec!["git".to_string()];
+    argv.extend(diff_args(staged, pathspec));
+    argv
+}
+
+fn diff_args(staged: bool, pathspec: &[String]) -> Vec<String> {
     let mut args = vec!["diff".to_string(), "--no-color".to_string()];
     if staged {
         args.push("--cached".into());
@@ -79,7 +125,7 @@ pub fn diff(
         args.push("--".into());
         args.extend(pathspec.iter().cloned());
     }
-    run_owned(workspace, &args)
+    args
 }
 
 pub fn diff_page(
@@ -512,6 +558,36 @@ mod tests {
         add(&workspace, &["a.txt".into()]).unwrap();
         commit(&workspace, "test commit", &[]).unwrap();
         assert!(log(&workspace, 1).unwrap().stdout.contains("test commit"));
+    }
+
+    #[test]
+    fn protected_diff_path_scan_returns_names_without_diff_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=old-secret\n").unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        add(&workspace, &[".env".into()]).unwrap();
+        commit(&workspace, "add protected file", &[]).unwrap();
+        fs::write(dir.path().join(".env"), "TOKEN=new-secret\n").unwrap();
+
+        let paths = protected_diff_paths(&workspace, false, &[]).unwrap();
+        assert_eq!(paths, vec![".env"]);
+        let authorization = diff_authorization_argv(false, &[]);
+        assert_eq!(authorization, vec!["git", "diff", "--no-color"]);
     }
 
     #[test]
