@@ -133,7 +133,7 @@ pub(super) fn list() -> Value {
                     "branch": {"type": "string", "minLength": 1, "maxLength": 256},
                     "remote": {"type": "string", "minLength": 1, "maxLength": 256},
                     "refspec": {"type": "string", "minLength": 1, "maxLength": 256},
-                    "expected_head": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "expected_head": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Required for commit; current HEAD must match both before approval is requested and before execution."},
                     "approval_id": {"type": "string"}
                 },
                 "required": ["action"],

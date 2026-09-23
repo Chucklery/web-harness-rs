@@ -62,6 +62,15 @@ impl RuntimeTool for GitRuntime {
             .and_then(Value::as_str)
             .map(validate_expected_head)
             .transpose()?;
+        if action == "commit" && expected_head.is_none() {
+            return Err(RuntimeToolError::new(
+                RuntimeErrorKind::InvalidArguments,
+                "commit requires expected_head",
+            ));
+        }
+        if let Some(expected_head) = expected_head.as_deref() {
+            ensure_expected_head(context.workspace(), expected_head)?;
+        }
 
         match risk {
             GitRisk::ReadOnly => {
@@ -157,13 +166,7 @@ impl RuntimeTool for GitRuntime {
                     }));
                 }
                 if let Some(expected_head) = expected_head.as_deref() {
-                    let actual_head = git::head(context.workspace()).map_err(git_error)?;
-                    if actual_head != expected_head {
-                        return Err(RuntimeToolError::new(
-                            RuntimeErrorKind::Conflict,
-                            "repository HEAD changed since approval was requested",
-                        ));
-                    }
+                    ensure_expected_head(context.workspace(), expected_head)?;
                 }
             }
         }
@@ -250,6 +253,24 @@ impl RuntimeTool for GitRuntime {
         serde_json::to_value(result)
             .map_err(|error| RuntimeToolError::new(RuntimeErrorKind::Execution, error.to_string()))
     }
+}
+
+fn ensure_expected_head(
+    workspace: &crate::workspace::Workspace,
+    expected_head: &str,
+) -> Result<(), RuntimeToolError> {
+    let actual_head = git::head(workspace).map_err(git_error)?;
+    verify_expected_head(expected_head, &actual_head)
+}
+
+fn verify_expected_head(expected_head: &str, actual_head: &str) -> Result<(), RuntimeToolError> {
+    if actual_head != expected_head {
+        return Err(RuntimeToolError::new(
+            RuntimeErrorKind::Conflict,
+            "repository HEAD changed since expected_head was supplied",
+        ));
+    }
+    Ok(())
 }
 
 fn risk_for(action: &str) -> Option<GitRisk> {
@@ -376,6 +397,30 @@ mod tests {
     }
 
     #[test]
+    fn commit_requires_expected_head_before_requesting_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let workspace = crate::workspace::Workspace::new(dir.path()).unwrap();
+        let mut jobs = JobManager::new();
+        let mut permissions = PermissionEngine::new().unwrap();
+
+        let error = GitRuntime
+            .call(
+                &mut ExecutionContext::new(&workspace, &mut jobs, &mut permissions),
+                &json!({"action":"commit","message":"test"}),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidArguments);
+        assert!(error.message().contains("expected_head"));
+    }
+
+    #[test]
     fn diff_requires_host_approval_before_returning_protected_content() {
         let dir = tempfile::tempdir().unwrap();
         for args in [
@@ -486,5 +531,13 @@ mod tests {
     #[test]
     fn expected_head_accepts_revision_tokens() {
         assert_eq!(validate_expected_head("abc123").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn expected_head_guard_rejects_changed_head() {
+        assert_eq!(
+            verify_expected_head("abc123", "def456").unwrap_err().kind(),
+            RuntimeErrorKind::Conflict
+        );
     }
 }
