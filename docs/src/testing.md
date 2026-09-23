@@ -11,6 +11,7 @@ Current automated tests cover:
 - Git status gateway
 - approval ticket binding and one-time consumption
 - an end-to-end stdio MCP initialization and tool-list test
+- an approved background-job run followed by MCP disconnect and process-group cleanup verification
 - a tunnel doctor that validates local MCP roundtrip before external tunnel acceptance
 - a bounded external tunnel-evidence contract; a successful wrapper exit without complete evidence is not accepted
 

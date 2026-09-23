@@ -277,6 +277,96 @@ fn opaque_exec_launcher_requires_host_approval_before_spawn() {
 
 #[cfg(unix)]
 #[test]
+fn disconnect_terminates_owned_background_job_process_group() {
+    let binary = env!("CARGO_BIN_EXE_web-harness");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("worker.sh"),
+        "printf '%s\\n' \"$$\" > worker.pid\nexec sleep 30\n",
+    )
+    .unwrap();
+
+    let mut child = Command::new(binary)
+        .args([
+            "serve",
+            "--stdio",
+            "--workspace",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"capabilities":{"elicitation":{"form":{}}}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let _: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"exec","arguments":{
+                "argv":["sh","worker.sh"],"background":true
+            }}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let approval: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(approval["method"], "elicitation/create");
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc":"2.0","id":approval["id"],
+            "result":{"action":"accept","content":{"approved":true}}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let started: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(started["result"]["structuredContent"]["state"], "running");
+    let pid_file = dir.path().join("worker.pid");
+    let pid = (0..100)
+        .find_map(|_| {
+            std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .or_else(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    None
+                })
+        })
+        .expect("background worker should publish its pid before disconnect");
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let alive = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(!alive, "host disconnect must terminate the owned worker");
+}
+
+#[cfg(unix)]
+#[test]
 fn stdio_mcp_batches_search_queries_with_one_result_budget() {
     let binary = env!("CARGO_BIN_EXE_web-harness");
     let dir = tempfile::tempdir().unwrap();
