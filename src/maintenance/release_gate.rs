@@ -8,6 +8,7 @@ pub struct ReleaseGateReport {
     pub overall: String,
     pub intel_8gb: String,
     pub apple_silicon_8gb: String,
+    pub local_tool_dispatch_p95: String,
     pub tunnel_plus_host_rss: String,
     pub evidence_files: Vec<String>,
     pub notes: Vec<String>,
@@ -16,6 +17,7 @@ pub struct ReleaseGateReport {
 pub fn evaluate(paths: &[PathBuf]) -> Result<ReleaseGateReport, Box<dyn std::error::Error>> {
     let mut intel = None;
     let mut arm = None;
+    let mut dispatch_samples = Vec::new();
     let mut tunnel_samples = Vec::new();
     let mut files = Vec::new();
 
@@ -32,6 +34,9 @@ pub fn evaluate(paths: &[PathBuf]) -> Result<ReleaseGateReport, Box<dyn std::err
                 "aarch64" | "arm64" => arm = Some(local_pass),
                 _ => {}
             }
+        }
+        if let Some(value) = report.evaluation.local_tool_dispatch_p95_under_20_ms {
+            dispatch_samples.push(value);
         }
         if let Some(value) = report.evaluation.tunnel_plus_host_idle_rss_under_150_mib {
             tunnel_samples.push(value);
@@ -50,11 +55,23 @@ pub fn evaluate(paths: &[PathBuf]) -> Result<ReleaseGateReport, Box<dyn std::err
     } else {
         "fail".to_string()
     };
+    let dispatch = if dispatch_samples.is_empty() {
+        "not_evaluated".to_string()
+    } else if dispatch_samples.iter().all(|value| *value) {
+        "pass".to_string()
+    } else {
+        "fail".to_string()
+    };
     let intel_state = state(intel);
     let arm_state = state(arm);
-    let overall = if intel_state == "fail" || arm_state == "fail" || tunnel == "fail" {
+    let overall = if intel_state == "fail"
+        || arm_state == "fail"
+        || dispatch == "fail"
+        || tunnel == "fail"
+    {
         "fail"
-    } else if intel_state == "pass" && arm_state == "pass" && tunnel == "pass" {
+    } else if intel_state == "pass" && arm_state == "pass" && dispatch == "pass" && tunnel == "pass"
+    {
         "pass"
     } else {
         "not_evaluated"
@@ -65,10 +82,12 @@ pub fn evaluate(paths: &[PathBuf]) -> Result<ReleaseGateReport, Box<dyn std::err
         overall,
         intel_8gb: intel_state,
         apple_silicon_8gb: arm_state,
+        local_tool_dispatch_p95: dispatch,
         tunnel_plus_host_rss: tunnel,
         evidence_files: files,
         notes: vec![
             "pass requires physical 8 GB Intel and Apple Silicon evidence plus measured Tunnel + Host RSS under 150 MiB".into(),
+            "local_tool_dispatch_p95 requires a measured RuntimeRegistry workspace_info p95 under 20 ms".into(),
             "missing evidence is reported as not_evaluated, never as pass".into(),
         ],
     })
@@ -106,6 +125,7 @@ mod tests {
         let report = evaluate(&[path]).unwrap();
         assert_eq!(report.intel_8gb, "pass");
         assert_eq!(report.apple_silicon_8gb, "not_evaluated");
+        assert_eq!(report.local_tool_dispatch_p95, "not_evaluated");
         assert_eq!(report.overall, "not_evaluated");
         Ok::<(), Box<dyn std::error::Error>>(())
     }

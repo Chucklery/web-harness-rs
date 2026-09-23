@@ -37,7 +37,7 @@ Or write it to the benchmark evidence directory:
 ./scripts/benchmark-8gb.sh 10000 benchmarks/latest.json
 ~~~
 
-The report includes OS/architecture, physical memory when available, local operation latency, MCP-ready startup time, Host RSS/CPU samples, gate targets, and per-gate evaluation.
+The report includes OS/architecture, physical memory when available, local operation latency, MCP-ready startup time, Host RSS/CPU samples, gate targets, and per-gate evaluation. Local dispatch p95 measures a direct `RuntimeRegistry` `workspace_info` call, including `ExecutionContext` construction and result serialization; it excludes MCP JSON-RPC transport and Secure MCP Tunnel round trips.
 
 Unmeasured gates are represented as null; they are never silently treated as passed.
 
@@ -54,6 +54,6 @@ Aggregate one or more benchmark evidence files:
 cargo run --release --features release-tools -- release-gate   --evidence benchmarks/intel.json   --evidence benchmarks/apple-silicon.json
 ~~~
 
-The output uses only pass, fail, and not_evaluated. A complete pass requires physical approximately-8-GiB evidence from both Intel and Apple Silicon macOS machines, plus measured Tunnel + Host RSS below 150 MiB. Missing evidence never becomes an implicit pass.
+The output uses only pass, fail, and not_evaluated. A complete pass requires physical approximately-8-GiB evidence from both Intel and Apple Silicon macOS machines, a measured direct local dispatch p95 below 20 ms, and measured Tunnel + Host RSS below 150 MiB. Missing evidence never becomes an implicit pass.
 
 `benchmark` and `release-gate` are maintainer/release instrumentation and are intentionally excluded from the default production binary. Enable them explicitly with the `release-tools` Cargo feature.

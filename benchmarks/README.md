@@ -16,11 +16,11 @@ Run a release-mode benchmark with:
 ./scripts/benchmark-8gb.sh 10000 benchmarks/latest.json
 ~~~
 
-The report records machine OS/architecture/physical memory, local operation latency samples, MCP-ready startup time, process RSS/CPU samples, target gates, and explicit null values for gates that were not measured.
+The report records machine OS/architecture/physical memory, local operation latency samples, MCP-ready startup time, process RSS/CPU samples, target gates, and explicit null values for gates that were not measured. Local-dispatch p95 measures a direct `RuntimeRegistry` `workspace_info` call, including context construction and result serialization, but excluding MCP transport and tunnel latency.
 
 ## Checked-in evidence
 
-`2026-09-18-intel-mac-8gb.json` and `2026-09-23-intel-mac-8gb.json` were collected from this physical x86_64 Mac reporting exactly 8 GiB RAM using release binaries. The newer snapshot uses 10,000 iterations, measures search successfully, and records Host RSS of 1,060 KiB and MCP-ready startup of 3 ms. Its patch p95 is 568 µs. It does not include a running official tunnel client, so Tunnel + Host RSS remains unevaluated; Apple Silicon evidence is also still missing.
+`2026-09-18-intel-mac-8gb.json` and `2026-09-23-intel-mac-8gb.json` were collected from this physical x86_64 Mac reporting exactly 8 GiB RAM using release binaries. The newer snapshot uses 10,000 iterations, measures search successfully, and records Host RSS of 1,060 KiB and MCP-ready startup of 4 ms. Direct local dispatch p95 is 8 µs, and patch p95 is 559 µs. It does not include a running official tunnel client, so Tunnel + Host RSS remains unevaluated; Apple Silicon evidence is also still missing.
 
 The 2026-09-18 snapshot is an earlier partial baseline:
 
@@ -31,6 +31,6 @@ The 2026-09-18 snapshot is an earlier partial baseline:
 - Tunnel + Host RSS: not measured
 - Apple Silicon 8 GiB: not measured
 
-The 2026-09-23 snapshot also measures search and records sub-microsecond timings rounded up to 1 µs rather than truncated to zero. Its exec timing includes process spawn and exit, so it is not a measurement of MCP dispatch overhead alone.
+The 2026-09-23 snapshot also measures search and records sub-microsecond timings rounded up to 1 µs rather than truncated to zero. Its exec timing includes process spawn and exit, so it is not a measurement of MCP dispatch overhead alone. The new direct `RuntimeRegistry` local-dispatch sample includes `ExecutionContext` construction and result serialization, but excludes MCP transport and tunnel latency.
 
 Do not use a single machine snapshot as a cross-machine performance guarantee.

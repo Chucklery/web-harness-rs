@@ -42,6 +42,8 @@ pub struct GateTargets {
 pub struct Measurements {
     pub workspace_info: LatencyMetric,
     pub read_file: LatencyMetric,
+    #[serde(default)]
+    pub local_dispatch: Option<OperationMetric>,
     pub search: OperationMetric,
     pub patch: OperationMetric,
     pub exec: OperationMetric,
@@ -78,6 +80,8 @@ pub struct ProcessMetric {
 pub struct GateEvaluation {
     pub host_idle_rss_under_80_mib: Option<bool>,
     pub cold_start_under_500_ms: Option<bool>,
+    #[serde(default)]
+    pub local_tool_dispatch_p95_under_20_ms: Option<bool>,
     pub tunnel_plus_host_idle_rss_under_150_mib: Option<bool>,
     pub tested_on_approximately_8gb_machine: Option<bool>,
 }
@@ -104,6 +108,23 @@ pub fn run(
                 .read_text_bounded("read.txt", 256 * 1024)
                 .expect("benchmark read"),
         );
+    });
+
+    let registry = crate::runtime::registry::RuntimeRegistry::default();
+    let mut runtime_jobs = JobManager::new();
+    let mut runtime_permissions = crate::permission::PermissionEngine::for_workspace(workspace)?;
+    let local_dispatch = operation_metric(iterations, || {
+        let mut context = crate::runtime::context::ExecutionContext::new(
+            workspace,
+            &mut runtime_jobs,
+            &mut runtime_permissions,
+        );
+        let value = registry
+            .call("workspace_info", &mut context, &json!({}))
+            .ok_or_else(|| "workspace_info missing from RuntimeRegistry".to_string())?
+            .map_err(|error| error.to_string())?;
+        std::hint::black_box(value);
+        Ok(())
     });
 
     let search = operation_metric(iterations.min(500), || {
@@ -175,6 +196,10 @@ pub fn run(
     let evaluation = GateEvaluation {
         host_idle_rss_under_80_mib: process.idle_rss_kib.map(|rss| rss < 80 * 1024),
         cold_start_under_500_ms: process.mcp_ready_ms.map(|ms| ms < 500),
+        local_tool_dispatch_p95_under_20_ms: local_dispatch
+            .latency
+            .as_ref()
+            .map(|latency| latency.p95_us < 20_000),
         tunnel_plus_host_idle_rss_under_150_mib: process
             .tunnel_plus_host_rss_kib
             .map(|rss| rss < 150 * 1024),
@@ -195,6 +220,7 @@ pub fn run(
         measurements: Measurements {
             workspace_info,
             read_file,
+            local_dispatch: Some(local_dispatch),
             search,
             patch,
             exec,
@@ -203,6 +229,7 @@ pub fn run(
         evaluation,
         notes: vec![
             "workspace_info/read_file timings are in-process kernel measurements, not remote MCP tunnel latency".into(),
+            "local_dispatch measures RuntimeRegistry workspace_info with ExecutionContext construction and result serialization; it excludes MCP transport and tunnel latency".into(),
             "tunnel+host RSS is intentionally not evaluated by this local benchmark".into(),
             "8 GB acceptance requires evidence from physical 8 GB Intel and Apple Silicon Macs".into(),
         ],
