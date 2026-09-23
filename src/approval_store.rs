@@ -252,7 +252,11 @@ fn read_record(path: &Path) -> std::io::Result<Option<ApprovalRecord>> {
     if !valid_ticket_id(expected_name) {
         return Ok(None);
     }
-    let file = fs::File::open(path)?;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
