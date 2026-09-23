@@ -1,6 +1,5 @@
 use crate::command_output;
 use crate::process;
-use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -10,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+
+pub mod evidence;
 
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const EXTERNAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -32,9 +33,9 @@ pub struct TunnelReport {
     pub local_mcp_roundtrip: bool,
     pub external_command_configured: bool,
     pub external_command_passed: Option<bool>,
+    pub external_evidence_valid: Option<bool>,
+    pub external_evidence: Option<evidence::AcceptanceEvidence>,
     pub external_exit_code: Option<i32>,
-    pub stdout_tail: Option<String>,
-    pub stderr_tail: Option<String>,
     pub note: String,
 }
 
@@ -46,9 +47,9 @@ pub fn doctor(workspace: &Workspace) -> Result<TunnelReport, TunnelError> {
         local_mcp_roundtrip: true,
         external_command_configured: false,
         external_command_passed: None,
+        external_evidence_valid: None,
+        external_evidence: None,
         external_exit_code: None,
-        stdout_tail: None,
-        stderr_tail: None,
         note: "Local stdio MCP initialize/tools-list, bounded read-only calls, and isolated write/exec/job/Git roundtrips passed. Configure an exact official tunnel acceptance command to test the remote tunnel.".into(),
     })
 }
@@ -64,9 +65,9 @@ pub fn accept(
             local_mcp_roundtrip: true,
             external_command_configured: false,
             external_command_passed: None,
+            external_evidence_valid: None,
+            external_evidence: None,
             external_exit_code: None,
-            stdout_tail: None,
-            stderr_tail: None,
                 note: "Local stdio MCP checks passed, but no external tunnel command is configured. Set WEB_HARNESS_TUNNEL_COMMAND_JSON to a JSON argv array that performs the current official Secure MCP Tunnel acceptance flow.".into(),
         });
     };
@@ -116,10 +117,10 @@ pub fn accept(
         if start.elapsed() >= EXTERNAL_TIMEOUT {
             terminate_child(child.child_mut())?;
             let _ = child.child_mut().wait();
-            let stdout = stdout_reader
+            let _stdout = stdout_reader
                 .join()
                 .unwrap_or_else(|_| Ok((Vec::new(), false)))?;
-            let stderr = stderr_reader
+            let _stderr = stderr_reader
                 .join()
                 .unwrap_or_else(|_| Ok((Vec::new(), false)))?;
             return Ok(TunnelReport {
@@ -127,12 +128,9 @@ pub fn accept(
                 local_mcp_roundtrip: true,
                 external_command_configured: true,
                 external_command_passed: Some(false),
+                external_evidence_valid: Some(false),
+                external_evidence: None,
                 external_exit_code: None,
-                stdout_tail: Some(redact::text(&String::from_utf8_lossy(&stdout.0))),
-                stderr_tail: Some(format!(
-                    "{}\nexternal tunnel acceptance command timed out after 120 seconds",
-                    redact::text(&String::from_utf8_lossy(&stderr.0))
-                )),
                 note: "The injected command is responsible for exercising the current official Secure MCP Tunnel flow.".into(),
             });
         }
@@ -142,20 +140,29 @@ pub fn accept(
     let stdout = stdout_reader
         .join()
         .map_err(|_| TunnelError::Local("external stdout reader panicked".into()))??;
-    let stderr = stderr_reader
+    let _stderr = stderr_reader
         .join()
         .map_err(|_| TunnelError::Local("external stderr reader panicked".into()))??;
     child.disarm();
-    let passed = status.success();
+    let evidence = evidence::AcceptanceEvidence::parse(&stdout.0, stdout.1).ok();
+    let evidence_valid = evidence.is_some();
+    let passed = status.success() && evidence_valid;
+    let note = if !status.success() {
+        "The injected external acceptance command exited unsuccessfully.".into()
+    } else if !evidence_valid {
+        "The external command exited successfully but did not emit valid complete acceptance evidence on stdout.".into()
+    } else {
+        "The external command exited successfully and supplied complete bounded acceptance evidence.".into()
+    };
     Ok(TunnelReport {
         passed,
         local_mcp_roundtrip: true,
         external_command_configured: true,
         external_command_passed: Some(passed),
+        external_evidence_valid: Some(evidence_valid),
+        external_evidence: evidence,
         external_exit_code: status.code(),
-        stdout_tail: Some(redact::text(&String::from_utf8_lossy(&stdout.0))),
-        stderr_tail: Some(redact::text(&String::from_utf8_lossy(&stderr.0))),
-        note: "The external command is user/CI supplied so this project never invents tunnel-client flags. It should implement the current official Secure MCP Tunnel acceptance steps.".into(),
+        note,
     })
 }
 

@@ -12,6 +12,7 @@ Current automated tests cover:
 - approval ticket binding and one-time consumption
 - an end-to-end stdio MCP initialization and tool-list test
 - a tunnel doctor that validates local MCP roundtrip before external tunnel acceptance
+- a bounded external tunnel-evidence contract; a successful wrapper exit without complete evidence is not accepted
 
 The project should grow toward five layers:
 
@@ -24,4 +25,3 @@ The project should grow toward five layers:
 Resource claims for 8 GB Macs require physical-machine evidence rather than CI assumptions.
 
 The built-in benchmark command emits machine-readable JSON and measures local operation latency plus MCP-ready startup/RSS/CPU. It still cannot evaluate Tunnel + Host RSS by itself, and a complete 8 GB gate requires physical Intel and Apple Silicon evidence. See [Performance and 8 GB Gates](benchmarks.md).
-

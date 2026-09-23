@@ -11,3 +11,5 @@ ChatGPT Web -> Secure MCP Tunnel -> tunnel-client -> web-harness
 Tunnel 参数和认证流程应以 OpenAI 最新文档为准。
 
 `web-harness tunnel doctor` 还会针对本地启动的 server 执行 initialize/tools-list，以及 workspace info、文件枚举、搜索和 Git status 的有界只读 `tools/call` roundtrip，并验证标准 tool-result envelope；不会修改配置的工作区。
+
+真实 Tunnel 验收 wrapper 必须在成功退出时将且仅将一个 JSON 验收证据对象写入 stdout，诊断日志写入 stderr；仅退出码为 0 不再算验收通过。证据上限为 16 KiB，不允许自由文本或工作区内容。它必须包含 schema 版本、ChatGPT 客户端和 MCP 协议版本、十个全部通过的阶段（连接、项目发现、读取、搜索、修改、验证、后台任务、Git 检查、用户审批、断开清理）、有序的工具调用结果，以及失败恢复路径。工具结果只能记录受限工具名、序号、固定 outcome 和可选的机器错误码；审批验证必须记录被 Host 阻止的调用及同一工具随后成功重试。验收报告可保存为元数据，但不得加入凭据、原始工具参数/结果、源码片段或其他敏感工作区内容。详细字段和值见英文 [Tunnel 验收契约](../tunnel.md#acceptance-harness)。

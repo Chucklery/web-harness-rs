@@ -24,7 +24,7 @@ On macOS, when /usr/bin/sandbox-exec is available, process execution is wrapped 
 
 Child processes do not inherit the full web-harness environment. The host clears the environment before exec and rebuilds a small operational allowlist such as PATH, HOME, TMPDIR, locale variables, terminal metadata, and SSH_AUTH_SOCK. Variables whose names look like tokens, passwords, cookies, secrets, credentials, or API keys are not forwarded.
 
-Process stdout/stderr and externally injected tunnel acceptance output are passed through a bounded redaction layer before being returned to the model or CLI. The redactor covers common assignment forms and bearer authorization values.
+Process stdout/stderr are passed through a bounded redaction layer before being returned to the model or CLI. Tunnel acceptance wrapper output is drained with a bound but is not echoed; only validated, bounded evidence fields are returned. The redactor covers common assignment forms and bearer authorization values.
 
 Redaction is a defense-in-depth measure, not permission to intentionally print secrets. Unknown secret formats can still exist, so commands should avoid emitting credentials in the first place.
 
