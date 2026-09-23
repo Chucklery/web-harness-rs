@@ -162,15 +162,16 @@ impl PermissionEngine {
         if self.approval_store.is_none() {
             self.approval_store = Some(ApprovalStore::new(self.workspace_root.as_deref())?);
         }
-        self.approval_store
+        let store = self
+            .approval_store
             .as_ref()
-            .unwrap()
-            .publish(&ApprovalRecord {
-                ticket_id: id.clone(),
-                capability: request.capability.as_str().into(),
-                summary: summary.clone(),
-                expires_unix_s,
-            })?;
+            .ok_or_else(|| std::io::Error::other("approval store unavailable"))?;
+        store.publish(&ApprovalRecord {
+            ticket_id: id.clone(),
+            capability: request.capability.as_str().into(),
+            summary: summary.clone(),
+            expires_unix_s,
+        })?;
         self.tickets.insert(
             id.clone(),
             Ticket {

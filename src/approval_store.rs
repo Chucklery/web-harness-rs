@@ -29,17 +29,17 @@ impl ApprovalStore {
         let root = config::state_dir()
             .map_err(|error| std::io::Error::other(error.to_string()))?
             .join("approvals");
-        fs::create_dir_all(&root)?;
-        ensure_private_directory(&root)?;
-        reap_dead_sessions(&root)?;
         if crate::sandbox::SandboxBackend::detect().enforced() {
-            let canonical_root = fs::canonicalize(&root)?;
+            let canonical_root = canonicalize_or_nearest_existing(&root)?;
             if is_writable_by_sandbox(&canonical_root, workspace)? {
                 return Err(std::io::Error::other(
                     "approval state directory is inside a sandbox-writable path",
                 ));
             }
         }
+        fs::create_dir_all(&root)?;
+        ensure_private_directory(&root)?;
+        reap_dead_sessions(&root)?;
 
         let live_sessions = fs::read_dir(&root)?
             .filter_map(Result::ok)
@@ -106,13 +106,13 @@ impl ApprovalStore {
     }
 
     pub fn approve(ticket_id: &str) -> std::io::Result<Option<ApprovalRecord>> {
-        let Some(record) = Self::pending_any(ticket_id)? else {
-            return Ok(None);
-        };
         let root = approvals_root()?;
         for session in session_directories(&root)? {
             let record_path = session.join(format!("{ticket_id}.json"));
-            if read_record(&record_path)?.is_some() {
+            if let Some(record) = read_record(&record_path)? {
+                if record.expires_unix_s <= now_unix_s() {
+                    return Ok(None);
+                }
                 let marker = session.join(format!("{ticket_id}.approved"));
                 atomic_file::stage(&marker, b"approved\n", true)?.commit()?;
                 return Ok(Some(record));
@@ -141,7 +141,7 @@ impl ApprovalStore {
         let root = approvals_root()?;
         let mut records = Vec::new();
         'sessions: for session in session_directories(&root)? {
-            let entries = match fs::read_dir(session) {
+            let entries = match fs::read_dir(&session) {
                 Ok(entries) => entries,
                 Err(_) => continue,
             };
@@ -154,7 +154,11 @@ impl ApprovalStore {
                     continue;
                 }
                 if let Some(record) = read_record(&path)? {
-                    if record.expires_unix_s > now_unix_s() {
+                    if record.expires_unix_s > now_unix_s()
+                        && !session
+                            .join(format!("{}.approved", record.ticket_id))
+                            .exists()
+                    {
                         records.push(record);
                     }
                 }
@@ -197,6 +201,22 @@ fn approvals_root() -> std::io::Result<PathBuf> {
     }
 }
 
+fn canonicalize_or_nearest_existing(path: &Path) -> std::io::Result<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("approval state path has no parent"))?;
+            Ok(canonicalize_or_nearest_existing(parent)?.join(
+                path.file_name()
+                    .ok_or_else(|| std::io::Error::other("approval state path has no name"))?,
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn session_directories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let Ok(entries) = fs::read_dir(root) else {
         return Ok(Vec::new());
@@ -223,6 +243,12 @@ fn read_record(path: &Path) -> std::io::Result<Option<ApprovalRecord>> {
     {
         return Ok(None);
     }
+    let Some(expected_name) = path.file_stem().and_then(|value| value.to_str()) else {
+        return Ok(None);
+    };
+    if !valid_ticket_id(expected_name) {
+        return Ok(None);
+    }
     let file = fs::File::open(path)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
@@ -230,7 +256,7 @@ fn read_record(path: &Path) -> std::io::Result<Option<ApprovalRecord>> {
         return Ok(None);
     }
     let record: ApprovalRecord = serde_json::from_slice(&bytes)?;
-    if !valid_ticket_id(&record.ticket_id) {
+    if record.ticket_id != expected_name {
         return Ok(None);
     }
     Ok(Some(record))
@@ -360,6 +386,23 @@ mod tests {
     }
 
     #[test]
+    fn canonicalizes_missing_paths_without_losing_symlink_ancestors() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = temp.path().join("alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real, &alias).unwrap();
+        let expected = fs::canonicalize(&real).unwrap().join("not-created");
+        assert_eq!(
+            canonicalize_or_nearest_existing(&alias.join("not-created")).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn approval_manifest_is_private_and_one_shot() {
         let store = ApprovalStore::new(None).unwrap();
         let record = ApprovalRecord {
@@ -384,5 +427,40 @@ mod tests {
         assert!(ApprovalStore::pending_any(&record.ticket_id)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn approved_requests_are_not_listed_as_pending() {
+        let store = ApprovalStore::new(None).unwrap();
+        let record = ApprovalRecord {
+            ticket_id: "apr_42_8_0123456789abcdef0123456789abcdef".into(),
+            capability: "process.execute".into(),
+            summary: "Run a bounded test".into(),
+            expires_unix_s: now_unix_s() + 60,
+        };
+        store.publish(&record).unwrap();
+        assert!(ApprovalStore::list_pending()
+            .unwrap()
+            .iter()
+            .any(|pending| pending.ticket_id == record.ticket_id));
+        ApprovalStore::approve(&record.ticket_id).unwrap().unwrap();
+        assert!(!ApprovalStore::list_pending()
+            .unwrap()
+            .iter()
+            .any(|pending| pending.ticket_id == record.ticket_id));
+    }
+
+    #[test]
+    fn expired_request_cannot_be_approved() {
+        let store = ApprovalStore::new(None).unwrap();
+        let record = ApprovalRecord {
+            ticket_id: "apr_42_9_0123456789abcdef0123456789abcdef".into(),
+            capability: "process.execute".into(),
+            summary: "Expired test".into(),
+            expires_unix_s: now_unix_s().saturating_sub(1),
+        };
+        store.publish(&record).unwrap();
+        assert!(ApprovalStore::approve(&record.ticket_id).unwrap().is_none());
+        assert!(!store.is_approved(&record.ticket_id).unwrap());
     }
 }
