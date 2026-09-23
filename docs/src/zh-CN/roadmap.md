@@ -14,7 +14,7 @@
 
 - 真实 ChatGPT Secure MCP Tunnel 端到端验收（当前只有本地 fixture/doctor 验收）。
 - Apple Silicon 8 GiB 实机基准，以及 Tunnel + Host 峰值 RSS 证据。
-- Linux Landlock 评估及原生 Linux 沙箱实现；当前未实现。
+- Linux Landlock 文件系统限制的上游文档可行性审查已完成；Linux enforcement 尚未实现，也未在 Linux 主机上测试。其权限能力依赖 ABI 版本，部分元数据操作无法限制，不能视为 Seatbelt 等价物。
 - 原生 Windows 沙箱；当前未实现，继续使用逐次审批且不宣称有 OS 沙箱保护。
 - 超出已记录 Intel Mac 快照的更广泛性能硬化。
 

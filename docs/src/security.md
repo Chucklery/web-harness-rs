@@ -46,7 +46,7 @@ The macOS test suite exercises four concrete Seatbelt properties: workspace-outs
 
 The current pre-1.0 boundary still has known limits:
 
-- non-macOS platforms do not yet have a native sandbox backend and therefore rely on explicit approvals
+- Linux Landlock has only received an upstream-documentation feasibility review; it is not implemented or host-tested. ABI-dependent filesystem and network rights, plus operations such as `chmod` that Landlock cannot restrict, prevent us from claiming Seatbelt-equivalent enforcement. Non-macOS execution continues to rely on explicit approvals. See the [upstream Landlock userspace documentation](https://docs.kernel.org/userspace-api/landlock.html).
 - secret redaction is heuristic and cannot recognize every possible secret format
 - broader sandbox compatibility testing is still needed across more developer toolchains and shell compositions
 - direct protected-path classification now covers common `.env`, private-key, and credential files for file reads, listing/search filtering, Git revision-file reads and diffs, and recognizable exec path arguments; Git diffs scan changed path names before returning content and require approval when protected files are included. A one-shot script containing recognizable Git mutation tokens additionally requires `git.local.write` or `git.remote.write` as appropriate; this text heuristic is not a complete audit of arbitrary scripts, which remain governed by explicit script approval and the OS sandbox.
