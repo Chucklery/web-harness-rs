@@ -227,7 +227,12 @@ impl Workspace {
             digest.update([1]);
             digest.update(&tail);
         }
-        Ok(format!("sha256:{:x}", digest.finalize()))
+        let digest = digest.finalize();
+        let hex = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(format!("sha256:{hex}"))
     }
 
     pub fn discover_agents(

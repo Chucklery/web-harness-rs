@@ -141,6 +141,17 @@ mod tests {
     use crate::sandbox::NetworkPolicy;
     use std::io::Cursor;
 
+    fn test_script(output: &str) -> Value {
+        json!({
+            "script": if cfg!(windows) {
+                format!("Write-Output '{output}'")
+            } else {
+                format!("printf '{output}\\n'")
+            },
+            "shell": if cfg!(windows) { "powershell" } else { "sh" }
+        })
+    }
+
     #[test]
     fn write_response_emits_one_flushed_jsonrpc_line() {
         let response = Response {
@@ -218,7 +229,7 @@ mod tests {
             }),
             json!({
                 "jsonrpc":"2.0", "id":2, "method":"tools/call",
-                "params":{"name":"exec", "arguments":{"script":"printf cancelled"}}
+                "params":{"name":"exec", "arguments":test_script("cancelled")}
             }),
             json!({
                 "jsonrpc":"2.0", "method":"notifications/cancelled",
@@ -259,7 +270,7 @@ mod tests {
             }),
             json!({
                 "jsonrpc":"2.0", "id":2, "method":"tools/call",
-                "params":{"name":"exec", "arguments":{"script":"printf declined"}}
+                "params":{"name":"exec", "arguments":test_script("declined")}
             }),
             json!({
                 "jsonrpc":"2.0", "id":"web_harness_elicitation_1",
