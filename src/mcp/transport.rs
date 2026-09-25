@@ -148,7 +148,7 @@ mod tests {
             } else {
                 format!("printf '{output}\\n'")
             },
-            "shell": if cfg!(windows) { "powershell" } else { "sh" }
+            "shell": if cfg!(windows) { "pwsh" } else { "sh" }
         })
     }
 
