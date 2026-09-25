@@ -156,7 +156,12 @@ impl ApprovalStore {
                 if path.extension().and_then(|value| value.to_str()) != Some("json") {
                     continue;
                 }
-                if let Some(record) = read_record(&path)? {
+                let record = match read_record(&path) {
+                    Ok(record) => record,
+                    Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                    Err(error) => return Err(error),
+                };
+                if let Some(record) = record {
                     if record.expires_unix_s > now_unix_s()
                         && !session
                             .join(format!("{}.approved", record.ticket_id))
