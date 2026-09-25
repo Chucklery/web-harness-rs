@@ -73,7 +73,7 @@ jobs:
             echo "release-tools commands must not be present in production binary" >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -135,7 +135,7 @@ jobs:
           finally {
             Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/*.zip
