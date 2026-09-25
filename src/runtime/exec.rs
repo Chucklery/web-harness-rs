@@ -63,7 +63,7 @@ impl RuntimeTool for ExecRuntime {
                 let shell = arguments
                     .get("shell")
                     .and_then(Value::as_str)
-                    .unwrap_or(if cfg!(windows) { "powershell" } else { "sh" });
+                    .unwrap_or(if cfg!(windows) { "pwsh" } else { "sh" });
                 validate_script_shell(shell)?;
                 vec![shell.to_string()]
             }
@@ -384,7 +384,7 @@ mod tests {
 
     fn test_shell() -> &'static str {
         if cfg!(windows) {
-            "powershell"
+            "pwsh"
         } else {
             "sh"
         }
