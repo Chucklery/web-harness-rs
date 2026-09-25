@@ -183,10 +183,20 @@ mod tests {
     }
 
     fn shell_exit_0() -> std::process::Child {
-        Command::new("/bin/sh")
-            .arg("-c")
-            .arg("exit 0")
-            .spawn()
-            .unwrap()
+        #[cfg(unix)]
+        {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 0")
+                .spawn()
+                .unwrap()
+        }
+        #[cfg(windows)]
+        {
+            Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .spawn()
+                .unwrap()
+        }
     }
 }
