@@ -511,7 +511,11 @@ mod tests {
         assert!(command.contains("serve --stdio --workspace"));
         assert!(command.contains("web harness"));
         assert!(command.contains("project with spaces"));
-        assert!(command.contains("--deny-paths '.git,target'"));
+        if cfg!(windows) {
+            assert!(command.contains("--deny-paths \".git,target\""));
+        } else {
+            assert!(command.contains("--deny-paths '.git,target'"));
+        }
     }
 
     #[cfg(unix)]

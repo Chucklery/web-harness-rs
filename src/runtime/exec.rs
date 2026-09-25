@@ -63,7 +63,7 @@ impl RuntimeTool for ExecRuntime {
                 let shell = arguments
                     .get("shell")
                     .and_then(Value::as_str)
-                    .unwrap_or("sh");
+                    .unwrap_or(if cfg!(windows) { "powershell" } else { "sh" });
                 validate_script_shell(shell)?;
                 vec![shell.to_string()]
             }
@@ -382,6 +382,22 @@ mod tests {
     use crate::permission::PermissionEngine;
     use crate::workspace::Workspace;
 
+    fn test_shell() -> &'static str {
+        if cfg!(windows) {
+            "powershell"
+        } else {
+            "sh"
+        }
+    }
+
+    fn test_script(output: &str) -> String {
+        if cfg!(windows) {
+            format!("Write-Output '{output}'")
+        } else {
+            format!("printf '{output}\\n'")
+        }
+    }
+
     #[test]
     fn validates_exec_shape_before_execution() {
         let dir = tempfile::tempdir().unwrap();
@@ -547,7 +563,10 @@ mod tests {
         let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
 
         let result = ExecRuntime
-            .call(&mut context, &json!({"script": "printf script"}))
+            .call(
+                &mut context,
+                &json!({"script": test_script("script"), "shell": test_shell()}),
+            )
             .unwrap();
         assert_eq!(result["status"], "approval_required");
         assert_eq!(result["capability"], "process.execute");
@@ -560,7 +579,8 @@ mod tests {
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
         let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
-        let request = json!({"script":"printf 'git push policy probe\\n'"});
+        let script = test_script("git push policy probe");
+        let request = json!({"script": script, "shell": test_shell()});
 
         let process_approval = ExecRuntime.call(&mut context, &request).unwrap();
         assert_eq!(process_approval["capability"], "process.execute");
@@ -580,12 +600,12 @@ mod tests {
 
         let network_authorization = ExecAuthorization {
             capability: Capability::NetworkOutbound,
-            argv: vec!["sh".into()],
+            argv: vec![test_shell().into()],
             cwd: None,
             background: false,
             network: NetworkPolicy::Deny,
             expected_head: None,
-            stdin: Some("printf 'git push policy probe\\n'".into()),
+            stdin: Some(script.clone()),
             protected_read: false,
         };
         let network_ticket = context
@@ -620,7 +640,8 @@ mod tests {
         let mut jobs = JobManager::new();
         let mut permissions = PermissionEngine::new().unwrap();
         let mut context = ExecutionContext::new(&workspace, &mut jobs, &mut permissions);
-        let request = json!({"script":"printf 'git add policy probe\\n'"});
+        let script = test_script("git add policy probe");
+        let request = json!({"script": script, "shell": test_shell()});
 
         let process_approval = ExecRuntime.call(&mut context, &request).unwrap();
         assert_eq!(process_approval["capability"], "process.execute");
