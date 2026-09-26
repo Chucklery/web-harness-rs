@@ -1,6 +1,7 @@
 use crate::command_output;
 use crate::env;
 use crate::path_policy;
+use crate::process;
 use crate::redact;
 use crate::workspace::Workspace;
 use serde::Serialize;
@@ -176,7 +177,7 @@ pub fn search(
     // bounded environment: an inherited `RIPGREP_CONFIG_PATH` or credential
     // variable would otherwise reach the child unfiltered.
     env::apply(&mut command);
-    let child = command.spawn().map_err(|error| {
+    let child = process::spawn_in_own_group(&mut command).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             SearchError::RipgrepUnavailable
         } else {

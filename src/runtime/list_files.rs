@@ -3,6 +3,7 @@ use super::tool_trait::{RuntimeErrorKind, RuntimeTool, RuntimeToolError};
 use crate::env;
 use crate::path_policy;
 use crate::permission::Capability;
+use crate::process;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Read;
@@ -118,7 +119,7 @@ fn tracked_entries(
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     env::apply(&mut command);
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = process::spawn_in_own_group(&mut command).map_err(|error| {
         RuntimeToolError::new(
             RuntimeErrorKind::Dependency,
             format!("git is unavailable: {error}"),

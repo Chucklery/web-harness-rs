@@ -1,6 +1,7 @@
 use crate::command_output;
 use crate::env;
 use crate::path_policy;
+use crate::process;
 use crate::redact;
 use crate::workspace::{Workspace, WorkspaceError};
 use serde::Serialize;
@@ -485,7 +486,7 @@ fn run_with_stdout_limit(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     env::apply(&mut command);
-    let child = command.spawn().map_err(|error| {
+    let child = process::spawn_in_own_group(&mut command).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             GitError::Unavailable
         } else {

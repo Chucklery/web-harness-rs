@@ -90,3 +90,5 @@ The default binary contains only the normal setup/connect/MCP execution path. Lo
 Source layout follows the same boundary: normal runtime modules remain directly under `src/`, while opt-in benchmark and release validation code lives under `src/maintenance/`.
 
 Runtime state must remain bounded. Background execution limits both concurrently running Jobs and retained completed Job metadata/output; old completed Jobs are evicted together with their temporary log artifacts. New capabilities should prefer the same pattern: one canonical runtime path, bounded state, and opt-in compilation for functionality normal users do not need.
+
+All runtime-owned child processes are started through one process-group helper. A failure to establish the group fails the spawn instead of silently weakening descendant cleanup; this applies to the tunnel, jobs, Git, ripgrep, file listing, and optional benchmark subprocesses.

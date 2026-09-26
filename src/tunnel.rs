@@ -218,9 +218,7 @@ impl Drop for ChildGuard {
 }
 
 fn spawn_in_group(mut command: Command) -> Result<Child, TunnelError> {
-    process::detach_into_own_group(&mut command)
-        .map_err(|error| TunnelError::Local(error.to_string()))?;
-    Ok(command.spawn()?)
+    Ok(process::spawn_in_own_group(&mut command)?)
 }
 
 struct LocalMcpClient {

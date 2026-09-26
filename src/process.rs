@@ -6,7 +6,7 @@
 //! [`crate::runtime`] and the bounded job execution code in [`crate::jobs`]
 //! cannot drift apart.
 
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -45,6 +45,13 @@ pub fn detach_into_own_group(command: &mut Command) -> Result<(), ProcessError> 
         let _ = command;
     }
     Ok(())
+}
+
+/// Spawn a child in its own process group. Keeping setup and spawn together
+/// prevents callers from accidentally ignoring a failed group configuration.
+pub fn spawn_in_own_group(command: &mut Command) -> std::io::Result<Child> {
+    detach_into_own_group(command).map_err(|error| std::io::Error::other(error.to_string()))?;
+    command.spawn()
 }
 
 /// Terminates the process group led by `pid`: `SIGTERM` first, then `SIGKILL`
@@ -168,9 +175,7 @@ mod tests {
     fn detaching_starts_the_child_in_its_own_group() {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg("exit 0");
-        detach_into_own_group(&mut command).unwrap();
-
-        let mut child = command.spawn().unwrap();
+        let mut child = spawn_in_own_group(&mut command).unwrap();
         let pid = child.id();
         // The child is spawned into a fresh group whose id is its own pid. A
         // signal-0 probe therefore proves the group exists.

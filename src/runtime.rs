@@ -202,8 +202,7 @@ pub fn connect(
             command.env(key, value);
         }
     }
-    process::detach_into_own_group(&mut command)?;
-    let mut child = command.spawn()?;
+    let mut child = process::spawn_in_own_group(&mut command)?;
     std::thread::sleep(TUNNEL_STARTUP_GRACE);
     if !process::process_alive(child.id()) {
         cleanup_failed_tunnel(&mut child);
@@ -523,8 +522,7 @@ mod tests {
     fn failed_tunnel_cleanup_terminates_the_owned_process_group() {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg("sleep 30 & exit 0");
-        process::detach_into_own_group(&mut command).unwrap();
-        let mut child = command.spawn().unwrap();
+        let mut child = process::spawn_in_own_group(&mut command).unwrap();
         let pid = child.id();
         for _ in 0..100 {
             if child.try_wait().unwrap().is_some() {

@@ -251,8 +251,7 @@ fn spawn(
     if sandboxed {
         command.env(sandbox::SANDBOX_ENV_MARKER, "seatbelt");
     }
-    let _ = process::detach_into_own_group(&mut command);
-    let mut child = command.spawn()?;
+    let mut child = process::spawn_in_own_group(&mut command)?;
     let stdout = child
         .stdout
         .take()

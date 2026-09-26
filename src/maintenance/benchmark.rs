@@ -318,12 +318,13 @@ fn process_metrics(
     let binary = std::env::current_exe()?;
     let workspace_arg = workspace.root().display().to_string();
     let start = Instant::now();
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(["serve", "--stdio", "--workspace", &workspace_arg])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    let mut child = crate::process::spawn_in_own_group(&mut command)?;
 
     let mut stdin = child.stdin.take().ok_or("missing benchmark child stdin")?;
     writeln!(
